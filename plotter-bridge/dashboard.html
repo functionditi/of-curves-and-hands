@@ -1,60 +1,132 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Kolam Plotter Bridge</title>
   <style>
     :root {
-      --bg: #f3efe5;
-      --panel: rgba(255, 250, 242, 0.88);
-      --panel-strong: rgba(255, 248, 237, 0.96);
-      --line: #d7c7ae;
-      --ink: #1f1d1a;
-      --muted: #645a4a;
-      --accent: #8e4b25;
-      --accent-strong: #c9682a;
-      --good: #1f7a47;
-      --warn: #ac7321;
-      --bad: #a23c2d;
-      --shadow: 0 24px 80px rgba(63, 39, 12, 0.14);
-      --radius: 22px;
+      --font-ui: "Menlo", "SFMono-Regular", monospace;
+      --page-bg: #ff6f19;
+      --page-accent: #fda366;
+      --page-cream: #ffe6da;
+      --panel-border: rgba(255, 111, 25, 0.4);
+      --panel-surface: rgba(255, 230, 218, 0.98);
+      --panel-surface-top: rgba(253, 163, 102, 0.78);
+      --panel-text: #993b19;
+      --panel-muted: rgba(153, 59, 25, 0.78);
+      --card-surface: rgba(255, 255, 255, 0.96);
+      --card-surface-soft: rgba(255, 230, 218, 0.94);
+      --card-border: rgba(255, 111, 25, 0.18);
+      --accent-ink: #993b19;
+      --accent-soft: #fda366;
+      --frame-node-size: 12px;
+      --frame-line-y: 52px;
+      --frame-line: rgba(255, 111, 25, 0.34);
+      --edge-glow: rgba(255, 230, 218, 0.2);
+      --inner-line: rgba(255, 111, 25, 0.16);
+      --shadow: 0 0 34px rgba(255, 230, 218, 0.14);
     }
 
-    * {
+    *,
+    *::before,
+    *::after {
       box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
     }
 
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at top left, rgba(201, 104, 42, 0.18), transparent 30%),
-        radial-gradient(circle at top right, rgba(33, 81, 209, 0.12), transparent 26%),
-        linear-gradient(180deg, #f7f1e6 0%, #efe5d6 100%);
+      padding: 18px;
+      font-family: var(--font-ui);
+      color: var(--panel-text);
+      background: var(--page-bg);
+      overflow-x: hidden;
     }
 
     .shell {
-      width: min(1400px, calc(100vw - 32px));
-      margin: 24px auto 40px;
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
     }
 
     .hero,
     .panel,
     .plotter-card {
-      border: 1px solid rgba(133, 103, 65, 0.16);
-      background: var(--panel);
-      backdrop-filter: blur(12px);
-      box-shadow: var(--shadow);
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: visible;
+      border: 1px solid var(--panel-border);
+      border-radius: 0;
+      background: var(--panel-surface);
+      color: var(--panel-text);
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.3),
+        var(--shadow);
+      isolation: isolate;
+    }
+
+    .hero::before,
+    .panel::before,
+    .plotter-card::before {
+      content: "";
+      position: absolute;
+      inset: calc(var(--frame-node-size) / -2);
+      pointer-events: none;
+      z-index: 0;
+      background:
+        radial-gradient(circle, rgba(255, 111, 25, 0.98) 0 calc((var(--frame-node-size) / 2) - 0.5px), transparent calc(var(--frame-node-size) / 2)),
+        radial-gradient(circle, rgba(255, 111, 25, 0.98) 0 calc((var(--frame-node-size) / 2) - 0.5px), transparent calc(var(--frame-node-size) / 2)),
+        radial-gradient(circle, rgba(255, 111, 25, 0.98) 0 calc((var(--frame-node-size) / 2) - 0.5px), transparent calc(var(--frame-node-size) / 2)),
+        radial-gradient(circle, rgba(255, 111, 25, 0.98) 0 calc((var(--frame-node-size) / 2) - 0.5px), transparent calc(var(--frame-node-size) / 2)),
+        linear-gradient(var(--frame-line), var(--frame-line)),
+        linear-gradient(var(--frame-line), var(--frame-line));
+      background-repeat: no-repeat;
+      background-size:
+        var(--frame-node-size) var(--frame-node-size),
+        var(--frame-node-size) var(--frame-node-size),
+        var(--frame-node-size) var(--frame-node-size),
+        var(--frame-node-size) var(--frame-node-size),
+        calc(100% - var(--frame-node-size)) 1px,
+        calc(100% - var(--frame-node-size)) 1px;
+      background-position:
+        left 0 top calc(var(--frame-line-y) - (var(--frame-node-size) / 2)),
+        right 0 top calc(var(--frame-line-y) - (var(--frame-node-size) / 2)),
+        left 0 bottom calc(var(--frame-line-y) - (var(--frame-node-size) / 2)),
+        right 0 bottom calc(var(--frame-line-y) - (var(--frame-node-size) / 2)),
+        left calc(var(--frame-node-size) / 2) top var(--frame-line-y),
+        left calc(var(--frame-node-size) / 2) bottom var(--frame-line-y);
+    }
+
+    .hero>*,
+    .panel>*,
+    .plotter-card>* {
+      position: relative;
+      z-index: 1;
     }
 
     .hero {
-      padding: 24px;
-      border-radius: 28px;
+      padding: 52px 28px 28px;
       display: grid;
-      gap: 18px;
+      gap: 20px;
+    }
+
+    .panel {
+      padding: 52px 22px 22px;
+    }
+
+    .plotter-card {
+      padding: 52px 20px 20px;
+      display: grid;
+      gap: 16px;
     }
 
     .hero-top {
@@ -73,11 +145,11 @@
     }
 
     h1 {
-      font-size: clamp(1.9rem, 3vw, 3rem);
-      line-height: 0.95;
+      max-width: 24ch;
+      font-size: clamp(2rem, 3vw, 3.2rem);
+      line-height: 0.94;
       letter-spacing: -0.05em;
-      font-weight: 750;
-      max-width: 8ch;
+      font-weight: 800;
     }
 
     .hero-copy p,
@@ -90,10 +162,10 @@
     }
 
     .hero-copy p {
-      color: var(--muted);
-      margin-top: 10px;
-      max-width: 54ch;
-      line-height: 1.5;
+      max-width: 56ch;
+      margin-top: 12px;
+      color: var(--panel-muted);
+      line-height: 1.55;
     }
 
     .status-strip {
@@ -106,32 +178,32 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      border-radius: 999px;
-      padding: 7px 12px;
-      font-size: 0.78rem;
-      background: rgba(255, 255, 255, 0.62);
-      border: 1px solid rgba(98, 74, 46, 0.12);
-      color: var(--muted);
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 111, 25, 0.18);
+      border-radius: 0;
+      background: rgba(255, 255, 255, 0.86);
+      color: var(--accent-ink);
+      font-size: 0.76rem;
       text-transform: uppercase;
       letter-spacing: 0.08em;
     }
 
     .pill.good {
-      color: var(--good);
-      border-color: rgba(31, 122, 71, 0.2);
-      background: rgba(31, 122, 71, 0.08);
+      color: var(--accent-ink);
+      background: #ffffff;
+      border-color: #ffffff;
     }
 
     .pill.warn {
-      color: var(--warn);
-      border-color: rgba(172, 115, 33, 0.2);
-      background: rgba(172, 115, 33, 0.08);
+      color: var(--accent-ink);
+      background: #ffe6da;
+      border-color: #ffe6da;
     }
 
     .pill.bad {
-      color: var(--bad);
-      border-color: rgba(162, 60, 45, 0.2);
-      background: rgba(162, 60, 45, 0.08);
+      color: var(--accent-ink);
+      background: #fda366;
+      border-color: rgba(255, 111, 25, 0.22);
     }
 
     .hero-actions,
@@ -142,65 +214,76 @@
       flex-wrap: wrap;
     }
 
+    .hero-actions,
+    .button-stack {
+      padding-top: 18px;
+      border-top: 1px solid rgba(255, 111, 25, 0.16);
+    }
+
     button,
     select {
       appearance: none;
-      border: 1px solid rgba(82, 54, 24, 0.16);
-      background: var(--panel-strong);
-      color: var(--ink);
-      border-radius: 14px;
+      border: 1px solid rgba(255, 111, 25, 0.22);
+      border-radius: 0;
       padding: 10px 14px;
-      font-size: 0.8rem;
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--accent-ink);
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
       cursor: pointer;
-      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, color 140ms ease;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.26);
     }
 
     button:hover,
     select:hover {
       transform: translateY(-1px);
-      border-color: rgba(82, 54, 24, 0.28);
+      border-color: rgba(255, 111, 25, 0.42);
+      background: #ffffff;
     }
 
     button.primary {
-      color: #fff8f2;
-      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-      border-color: transparent;
+      color: var(--accent-ink);
+      background: #ffffff;
+      border-color: #ffffff;
     }
 
     button.ghost {
-      background: transparent;
+      background: #ffe6da;
     }
 
     button.warn {
-      color: #fff8f2;
-      background: linear-gradient(135deg, #966117, #b78528);
-      border-color: transparent;
+      color: var(--accent-ink);
+      background: #fda366;
+      border-color: rgba(255, 111, 25, 0.22);
     }
 
     button.bad {
-      color: #fff7f4;
-      background: linear-gradient(135deg, #7d332b, #b14c3f);
-      border-color: transparent;
+      color: var(--accent-ink);
+      background: #ffffff;
+      border-color: rgba(255, 111, 25, 0.22);
     }
 
     .dashboard-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+      grid-template-columns: minmax(0, 1.28fr) minmax(320px, 0.72fr);
       gap: 18px;
-      margin-top: 18px;
     }
 
-    .panel {
-      border-radius: var(--radius);
-      padding: 18px;
+    .dashboard-grid>div {
+      min-width: 0;
+      display: grid;
+      gap: 18px;
     }
 
-    .panel h2 {
-      font-size: 0.86rem;
+    .panel h2,
+    .plotter-card h2 {
+      margin-bottom: 14px;
+      color: var(--panel-muted);
+      font-size: 0.84rem;
       text-transform: uppercase;
       letter-spacing: 0.12em;
-      color: var(--muted);
-      margin-bottom: 14px;
     }
 
     .summary-grid,
@@ -216,24 +299,27 @@
 
     .summary-card {
       padding: 14px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.5);
-      border: 1px solid rgba(85, 62, 35, 0.1);
+      border: 1px solid var(--card-border);
+      border-radius: 0;
+      background: var(--card-surface);
+      color: rgba(153, 59, 25, 0.8);
+      box-shadow: inset 0 0 0 1px rgba(255, 230, 218, 0.3);
     }
 
     .summary-card strong {
       display: block;
       margin-top: 8px;
+      color: var(--accent-ink);
       font-size: 1.35rem;
     }
 
     .plotters-grid {
       grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
-      margin-top: 18px;
+      margin-top: 0;
     }
 
     .area-panel {
-      margin-top: 18px;
+      margin-top: 0;
       display: grid;
       gap: 14px;
     }
@@ -251,12 +337,13 @@
     }
 
     .area-preview-card {
-      padding: 16px;
-      border-radius: 22px;
-      background: rgba(255, 255, 255, 0.54);
-      border: 1px solid rgba(85, 62, 35, 0.1);
       display: grid;
       gap: 14px;
+      padding: 16px;
+      border: 1px solid var(--card-border);
+      border-radius: 0;
+      background: var(--card-surface);
+      box-shadow: inset 0 0 0 1px rgba(255, 230, 218, 0.3);
     }
 
     .area-preview-top {
@@ -273,9 +360,10 @@
     }
 
     .area-preview-title h3 {
+      margin: 0;
+      color: var(--accent-ink);
       font-size: 1.1rem;
       letter-spacing: -0.03em;
-      margin: 0;
     }
 
     .area-slot-grid {
@@ -286,47 +374,48 @@
     .area-slot {
       aspect-ratio: 1 / 1;
       min-height: 88px;
-      border-radius: 18px;
-      padding: 10px 12px;
-      border: 1px dashed rgba(85, 62, 35, 0.18);
-      background: rgba(255, 255, 255, 0.46);
       display: flex;
       flex-direction: column;
       justify-content: space-between;
       gap: 8px;
+      padding: 10px 12px;
+      border: 1px dashed rgba(255, 111, 25, 0.26);
+      border-radius: 0;
+      background: rgba(255, 230, 218, 0.48);
+      color: rgba(153, 59, 25, 0.84);
     }
 
     .area-slot.filled {
       border-style: solid;
-      border-color: rgba(31, 122, 71, 0.24);
-      background: rgba(31, 122, 71, 0.12);
+      border-color: rgba(255, 111, 25, 0.34);
+      background: rgba(255, 230, 218, 0.82);
     }
 
     .area-slot.next {
       border-style: solid;
-      border-color: rgba(201, 104, 42, 0.32);
-      background: rgba(201, 104, 42, 0.15);
-      box-shadow: inset 0 0 0 1px rgba(201, 104, 42, 0.12);
+      border-color: #ff6f19;
+      background: rgba(253, 163, 102, 0.28);
+      box-shadow: inset 0 0 0 1px rgba(255, 111, 25, 0.12);
     }
 
     .area-slot-index {
+      color: rgba(153, 59, 25, 0.68);
       font-size: 0.68rem;
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: var(--muted);
     }
 
     .area-slot-label {
+      color: var(--accent-ink);
       font-size: 1rem;
       line-height: 1.2;
       letter-spacing: -0.03em;
-      color: var(--ink);
     }
 
     .area-slot-state {
+      color: rgba(153, 59, 25, 0.72);
       font-size: 0.72rem;
       line-height: 1.35;
-      color: var(--muted);
     }
 
     .area-slot-copy {
@@ -335,12 +424,13 @@
     }
 
     .area-slot-figure,
-    .plotter-area-frame {
-      border-radius: 16px;
-      background:
-        linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(244, 235, 223, 0.78));
-      border: 1px solid rgba(104, 74, 43, 0.12);
+    .plotter-area-frame,
+    .preview-frame {
       overflow: hidden;
+      border: 1px solid rgba(255, 111, 25, 0.18);
+      border-radius: 0;
+      background: #ffffff;
+      box-shadow: inset 0 0 0 1px rgba(255, 230, 218, 0.22);
     }
 
     .area-slot-figure {
@@ -357,10 +447,10 @@
 
     .area-slot-placeholder {
       padding: 10px;
+      color: rgba(153, 59, 25, 0.72);
       text-align: center;
       font-size: 0.7rem;
       line-height: 1.4;
-      color: var(--muted);
     }
 
     .plotter-area-frame {
@@ -377,19 +467,12 @@
 
     .area-preview-empty {
       padding: 18px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.46);
-      border: 1px dashed rgba(85, 62, 35, 0.16);
-      color: var(--muted);
+      border: 1px dashed rgba(255, 111, 25, 0.22);
+      border-radius: 0;
+      background: rgba(255, 255, 255, 0.96);
+      color: rgba(153, 59, 25, 0.72);
       line-height: 1.5;
       text-align: center;
-    }
-
-    .plotter-card {
-      border-radius: 26px;
-      padding: 18px;
-      display: grid;
-      gap: 16px;
     }
 
     .plotter-head {
@@ -406,6 +489,7 @@
     }
 
     .plotter-title h3 {
+      color: var(--panel-text);
       font-size: 1.3rem;
       letter-spacing: -0.04em;
     }
@@ -417,52 +501,49 @@
     }
 
     .kv {
+      min-height: 72px;
       padding: 10px 12px;
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.52);
-      border: 1px solid rgba(85, 62, 35, 0.1);
+      border: 1px solid rgba(255, 111, 25, 0.16);
+      border-radius: 0;
+      background: var(--card-surface);
+      color: rgba(153, 59, 25, 0.72);
       font-size: 0.75rem;
       line-height: 1.45;
-      color: var(--muted);
-      min-height: 72px;
+      box-shadow: inset 0 0 0 1px rgba(255, 230, 218, 0.3);
     }
 
     .kv strong {
       display: block;
-      color: var(--ink);
-      font-size: 0.95rem;
       margin-top: 5px;
+      color: var(--accent-ink);
+      font-size: 0.95rem;
       word-break: break-word;
     }
 
     .preview-frame {
       min-height: 240px;
-      border-radius: 20px;
-      background:
-        linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(244, 235, 223, 0.78));
-      border: 1px solid rgba(104, 74, 43, 0.12);
       padding: 12px;
       display: grid;
       place-items: center;
-      overflow: hidden;
     }
 
     .preview-frame svg {
+      display: block;
       max-width: 100%;
       max-height: 260px;
-      display: block;
     }
 
     .preview-placeholder {
-      color: var(--muted);
+      max-width: 30ch;
+      color: rgba(153, 59, 25, 0.72);
       text-align: center;
       line-height: 1.5;
-      max-width: 30ch;
     }
 
     .log-panel {
       display: grid;
-      gap: 10px;
+      gap: 16px;
+      align-content: start;
     }
 
     .log-feed {
@@ -474,19 +555,21 @@
     }
 
     .log-entry {
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 111, 25, 0.16);
+      border-radius: 0;
+      background: var(--card-surface);
+      color: rgba(153, 59, 25, 0.82);
       font-size: 0.76rem;
       line-height: 1.5;
-      padding: 10px 12px;
-      border-radius: 14px;
-      background: rgba(255, 255, 255, 0.5);
-      border: 1px solid rgba(85, 62, 35, 0.1);
       white-space: pre-wrap;
       word-break: break-word;
+      box-shadow: inset 0 0 0 1px rgba(255, 230, 218, 0.3);
     }
 
     .meta-line {
+      color: var(--panel-muted);
       font-size: 0.77rem;
-      color: var(--muted);
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -498,15 +581,30 @@
     }
 
     @media (max-width: 700px) {
-      .shell {
-        width: min(100vw - 18px, 1400px);
-        margin: 10px auto 24px;
+      :root {
+        --frame-line-y: 40px;
+      }
+
+      body {
+        padding: 12px;
       }
 
       .hero,
       .panel,
       .plotter-card {
-        border-radius: 20px;
+        padding-left: 18px;
+        padding-right: 18px;
+      }
+
+      .hero {
+        padding-top: 42px;
+        padding-bottom: 20px;
+      }
+
+      .panel,
+      .plotter-card {
+        padding-top: 42px;
+        padding-bottom: 18px;
       }
 
       .kv-grid {
@@ -515,13 +613,15 @@
     }
   </style>
 </head>
+
 <body>
   <main class="shell">
     <section class="hero">
       <div class="hero-top">
         <div class="hero-copy">
           <h1>Kolam Plotter Bridge</h1>
-          <p>Live control surface for the bridge: plotter/servo status, passive-session previews, and manual actions without hopping back to the terminal.</p>
+          <p>Live control surface for the bridge: plotter/servo status, passive-session previews, and manual actions
+            without hopping back to the terminal.</p>
         </div>
         <div class="status-strip" id="hero-status"></div>
       </div>
@@ -646,8 +746,9 @@
       entry.className = "log-entry";
       entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
       if (kind === "error") {
-        entry.style.borderColor = "rgba(162, 60, 45, 0.25)";
-        entry.style.background = "rgba(162, 60, 45, 0.06)";
+        entry.style.borderColor = "rgba(255, 111, 25, 0.28)";
+        entry.style.background = "#ffe6da";
+        entry.style.color = "#993b19";
       }
       logFeed.prepend(entry);
       while (logFeed.childElementCount > 20) {
@@ -697,7 +798,7 @@
       const url = bridgeUrl(path);
       const response = await fetch(url, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const payload = await readJsonResponse(response, path).catch((error) => {
@@ -965,13 +1066,13 @@
 
         const buttons = node.querySelector(".button-stack");
         buttons.append(
-          button("Pen Down", "", () => runAction("/pen-down", {plotter_index: plotter.plotter_index}, `Pen down on plotter ${plotter.plotter_label}`)),
-          button("Pen Up", "", () => runAction("/pen-up", {plotter_index: plotter.plotter_index}, `Pen up on plotter ${plotter.plotter_label}`)),
-          button("Servo Toggle", "", () => runAction("/arduino/servo-toggle", {plotter_index: plotter.plotter_index}, `Servo toggled for plotter ${plotter.plotter_label}`)),
-          button("Servo Marker", "", () => runAction("/arduino/servo-mode", {plotter_index: plotter.plotter_index, mode: "marker"}, `Servo marker for plotter ${plotter.plotter_label}`)),
-          button("Servo Erase", "warn", () => runAction("/arduino/servo-mode", {plotter_index: plotter.plotter_index, mode: "erase"}, `Servo erase for plotter ${plotter.plotter_label}`)),
-          button("Erase Trace", "warn", () => runAction("/erase-trace", {plotter_index: plotter.plotter_index}, `Passive-mode erase trace demo on plotter ${plotter.plotter_label}`)),
-          button("Disable", "bad", () => runAction("/disable-motors", {plotter_index: plotter.plotter_index}, `Disabled plotter ${plotter.plotter_label}`)),
+          button("Pen Down", "", () => runAction("/pen-down", { plotter_index: plotter.plotter_index }, `Pen down on plotter ${plotter.plotter_label}`)),
+          button("Pen Up", "", () => runAction("/pen-up", { plotter_index: plotter.plotter_index }, `Pen up on plotter ${plotter.plotter_label}`)),
+          button("Servo Toggle", "", () => runAction("/arduino/servo-toggle", { plotter_index: plotter.plotter_index }, `Servo toggled for plotter ${plotter.plotter_label}`)),
+          button("Servo Marker", "", () => runAction("/arduino/servo-mode", { plotter_index: plotter.plotter_index, mode: "marker" }, `Servo marker for plotter ${plotter.plotter_label}`)),
+          button("Servo Erase", "warn", () => runAction("/arduino/servo-mode", { plotter_index: plotter.plotter_index, mode: "erase" }, `Servo erase for plotter ${plotter.plotter_label}`)),
+          button("Erase Trace", "warn", () => runAction("/erase-trace", { plotter_index: plotter.plotter_index }, `Passive-mode erase trace demo on plotter ${plotter.plotter_label}`)),
+          button("Disable", "bad", () => runAction("/disable-motors", { plotter_index: plotter.plotter_index }, `Disabled plotter ${plotter.plotter_label}`)),
         );
 
         const plotterAreaFrame = node.querySelector(".plotter-area-frame");
@@ -1084,4 +1185,5 @@
     state.pollHandle = window.setInterval(refreshState, 2000);
   </script>
 </body>
+
 </html>
