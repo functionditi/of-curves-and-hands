@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kolam Plotter Bridge</title>
+  <style>
+    :root {
+      --bg: #f3efe5;
+      --panel: rgba(255, 250, 242, 0.88);
+      --panel-strong: rgba(255, 248, 237, 0.96);
+      --line: #d7c7ae;
+      --ink: #1f1d1a;
+      --muted: #645a4a;
+      --accent: #8e4b25;
+      --accent-strong: #c9682a;
+      --good: #1f7a47;
+      --warn: #ac7321;
+      --bad: #a23c2d;
+      --shadow: 0 24px 80px rgba(63, 39, 12, 0.14);
+      --radius: 22px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(201, 104, 42, 0.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(33, 81, 209, 0.12), transparent 26%),
+        linear-gradient(180deg, #f7f1e6 0%, #efe5d6 100%);
+    }
+
+    .shell {
+      width: min(1400px, calc(100vw - 32px));
+      margin: 24px auto 40px;
+    }
+
+    .hero,
+    .panel,
+    .plotter-card {
+      border: 1px solid rgba(133, 103, 65, 0.16);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 24px;
+      border-radius: 28px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: start;
+      flex-wrap: wrap;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(1.9rem, 3vw, 3rem);
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      font-weight: 750;
+      max-width: 8ch;
+    }
+
+    .hero-copy p,
+    .meta-line,
+    .kv,
+    .log-entry,
+    button,
+    select {
+      font-family: "Menlo", "SFMono-Regular", monospace;
+    }
+
+    .hero-copy p {
+      color: var(--muted);
+      margin-top: 10px;
+      max-width: 54ch;
+      line-height: 1.5;
+    }
+
+    .status-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 0.78rem;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid rgba(98, 74, 46, 0.12);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .pill.good {
+      color: var(--good);
+      border-color: rgba(31, 122, 71, 0.2);
+      background: rgba(31, 122, 71, 0.08);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(172, 115, 33, 0.2);
+      background: rgba(172, 115, 33, 0.08);
+    }
+
+    .pill.bad {
+      color: var(--bad);
+      border-color: rgba(162, 60, 45, 0.2);
+      background: rgba(162, 60, 45, 0.08);
+    }
+
+    .hero-actions,
+    .button-row,
+    .button-stack {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button,
+    select {
+      appearance: none;
+      border: 1px solid rgba(82, 54, 24, 0.16);
+      background: var(--panel-strong);
+      color: var(--ink);
+      border-radius: 14px;
+      padding: 10px 14px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+    }
+
+    button:hover,
+    select:hover {
+      transform: translateY(-1px);
+      border-color: rgba(82, 54, 24, 0.28);
+    }
+
+    button.primary {
+      color: #fff8f2;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      border-color: transparent;
+    }
+
+    button.ghost {
+      background: transparent;
+    }
+
+    button.warn {
+      color: #fff8f2;
+      background: linear-gradient(135deg, #966117, #b78528);
+      border-color: transparent;
+    }
+
+    button.bad {
+      color: #fff7f4;
+      background: linear-gradient(135deg, #7d332b, #b14c3f);
+      border-color: transparent;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .panel {
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+
+    .panel h2 {
+      font-size: 0.86rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    .summary-grid,
+    .plotters-grid,
+    .area-preview-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .summary-grid {
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+
+    .summary-card {
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.5);
+      border: 1px solid rgba(85, 62, 35, 0.1);
+    }
+
+    .summary-card strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 1.35rem;
+    }
+
+    .plotters-grid {
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      margin-top: 18px;
+    }
+
+    .area-panel {
+      margin-top: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .area-panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: start;
+    }
+
+    .area-preview-grid {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+
+    .area-preview-card {
+      padding: 16px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.54);
+      border: 1px solid rgba(85, 62, 35, 0.1);
+      display: grid;
+      gap: 14px;
+    }
+
+    .area-preview-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+      flex-wrap: wrap;
+    }
+
+    .area-preview-title {
+      display: grid;
+      gap: 6px;
+    }
+
+    .area-preview-title h3 {
+      font-size: 1.1rem;
+      letter-spacing: -0.03em;
+      margin: 0;
+    }
+
+    .area-slot-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .area-slot {
+      aspect-ratio: 1 / 1;
+      min-height: 88px;
+      border-radius: 18px;
+      padding: 10px 12px;
+      border: 1px dashed rgba(85, 62, 35, 0.18);
+      background: rgba(255, 255, 255, 0.46);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .area-slot.filled {
+      border-style: solid;
+      border-color: rgba(31, 122, 71, 0.24);
+      background: rgba(31, 122, 71, 0.12);
+    }
+
+    .area-slot.next {
+      border-style: solid;
+      border-color: rgba(201, 104, 42, 0.32);
+      background: rgba(201, 104, 42, 0.15);
+      box-shadow: inset 0 0 0 1px rgba(201, 104, 42, 0.12);
+    }
+
+    .area-slot-index {
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .area-slot-label {
+      font-size: 1rem;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
+      color: var(--ink);
+    }
+
+    .area-slot-state {
+      font-size: 0.72rem;
+      line-height: 1.35;
+      color: var(--muted);
+    }
+
+    .area-slot-copy {
+      display: grid;
+      gap: 4px;
+    }
+
+    .area-slot-figure,
+    .plotter-area-frame {
+      border-radius: 16px;
+      background:
+        linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(244, 235, 223, 0.78));
+      border: 1px solid rgba(104, 74, 43, 0.12);
+      overflow: hidden;
+    }
+
+    .area-slot-figure {
+      min-height: 82px;
+      display: grid;
+      place-items: center;
+    }
+
+    .area-slot-figure svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .area-slot-placeholder {
+      padding: 10px;
+      text-align: center;
+      font-size: 0.7rem;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
+    .plotter-area-frame {
+      padding: 12px;
+    }
+
+    .plotter-area-frame .area-slot {
+      min-height: 72px;
+    }
+
+    .plotter-area-frame .area-slot-figure {
+      min-height: 68px;
+    }
+
+    .area-preview-empty {
+      padding: 18px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.46);
+      border: 1px dashed rgba(85, 62, 35, 0.16);
+      color: var(--muted);
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .plotter-card {
+      border-radius: 26px;
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .plotter-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .plotter-title {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .plotter-title h3 {
+      font-size: 1.3rem;
+      letter-spacing: -0.04em;
+    }
+
+    .kv-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .kv {
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.52);
+      border: 1px solid rgba(85, 62, 35, 0.1);
+      font-size: 0.75rem;
+      line-height: 1.45;
+      color: var(--muted);
+      min-height: 72px;
+    }
+
+    .kv strong {
+      display: block;
+      color: var(--ink);
+      font-size: 0.95rem;
+      margin-top: 5px;
+      word-break: break-word;
+    }
+
+    .preview-frame {
+      min-height: 240px;
+      border-radius: 20px;
+      background:
+        linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(244, 235, 223, 0.78));
+      border: 1px solid rgba(104, 74, 43, 0.12);
+      padding: 12px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .preview-frame svg {
+      max-width: 100%;
+      max-height: 260px;
+      display: block;
+    }
+
+    .preview-placeholder {
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.5;
+      max-width: 30ch;
+    }
+
+    .log-panel {
+      display: grid;
+      gap: 10px;
+    }
+
+    .log-feed {
+      max-height: 420px;
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+      padding-right: 4px;
+    }
+
+    .log-entry {
+      font-size: 0.76rem;
+      line-height: 1.5;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.5);
+      border: 1px solid rgba(85, 62, 35, 0.1);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .meta-line {
+      font-size: 0.77rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    @media (max-width: 1100px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .shell {
+        width: min(100vw - 18px, 1400px);
+        margin: 10px auto 24px;
+      }
+
+      .hero,
+      .panel,
+      .plotter-card {
+        border-radius: 20px;
+      }
+
+      .kv-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-top">
+        <div class="hero-copy">
+          <h1>Kolam Plotter Bridge</h1>
+          <p>Live control surface for the bridge: plotter/servo status, passive-session previews, and manual actions without hopping back to the terminal.</p>
+        </div>
+        <div class="status-strip" id="hero-status"></div>
+      </div>
+      <div class="hero-actions">
+        <button class="primary" data-action="arduino-connect">Arduino Connect</button>
+        <button class="ghost" data-action="arduino-disconnect">Arduino Disconnect</button>
+        <button class="ghost" data-action="servo-toggle-all">Toggle All Servos</button>
+        <button class="ghost" data-action="pen-down-all">Pen Down All</button>
+        <button class="ghost" data-action="pen-up-all">Pen Up All</button>
+        <button class="warn" data-action="erase-all">Erase Trace All</button>
+        <button class="bad" data-action="disable-all">Disable All</button>
+        <button class="primary" data-action="passive-start">Start Passive</button>
+        <button class="bad" data-action="passive-stop">Stop Passive</button>
+        <button class="ghost" data-action="refresh">Refresh</button>
+      </div>
+    </section>
+
+    <section class="dashboard-grid">
+      <div>
+        <section class="panel">
+          <h2>System Summary</h2>
+          <div class="summary-grid" id="summary-grid"></div>
+        </section>
+        <section class="panel area-panel">
+          <div class="area-panel-head">
+            <div>
+              <h2>3 x 2 Guided Area Preview</h2>
+              <div class="meta-line" id="active-area-meta">Waiting for active area state...</div>
+            </div>
+          </div>
+          <div class="area-preview-grid" id="active-area-preview-grid"></div>
+        </section>
+        <section class="plotters-grid" id="plotters-grid"></section>
+      </div>
+
+      <aside class="panel log-panel">
+        <div>
+          <h2>Bridge Notes</h2>
+          <div class="meta-line" id="bridge-meta">Polling bridge state...</div>
+        </div>
+        <div>
+          <h2>Activity</h2>
+          <div class="log-feed" id="log-feed"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <template id="plotter-card-template">
+    <article class="plotter-card">
+      <div class="plotter-head">
+        <div class="plotter-title">
+          <h3></h3>
+          <div class="status-strip"></div>
+        </div>
+      </div>
+      <div class="kv-grid"></div>
+      <div class="button-stack"></div>
+      <div>
+        <h2 style="margin-bottom:10px;">Prototype Area</h2>
+        <div class="plotter-area-frame"></div>
+      </div>
+      <div>
+        <h2 style="margin-bottom:10px;">Next Passive Kolam</h2>
+        <div class="preview-frame"></div>
+      </div>
+    </article>
+  </template>
+
+  <script>
+    const DEFAULT_BRIDGE_ORIGIN = "http://127.0.0.1:8765";
+
+    const state = {
+      snapshot: null,
+      pollHandle: null,
+      requestInFlight: false,
+    };
+
+    const logFeed = document.getElementById("log-feed");
+    const bridgeMeta = document.getElementById("bridge-meta");
+    const bridgeOrigin = resolveBridgeOrigin();
+
+    function resolveBridgeOrigin() {
+      const params = new URLSearchParams(window.location.search);
+      const requestedOrigin = params.get("bridge");
+      if (requestedOrigin) {
+        try {
+          return new URL(requestedOrigin).origin;
+        } catch (error) {
+          console.warn("Ignoring invalid bridge origin query parameter.", error);
+        }
+      }
+
+      if (window.location.protocol.startsWith("http")) {
+        const host = window.location.hostname;
+        const port = window.location.port;
+        if ((host === "127.0.0.1" || host === "localhost") && port === "8765") {
+          return window.location.origin;
+        }
+      }
+
+      return DEFAULT_BRIDGE_ORIGIN;
+    }
+
+    function bridgeUrl(path) {
+      return new URL(path, `${bridgeOrigin}/`).toString();
+    }
+
+    async function readJsonResponse(response, path) {
+      const bodyText = await response.text();
+      const contentType = response.headers.get("content-type") || "";
+      try {
+        return JSON.parse(bodyText);
+      } catch (error) {
+        const compactBody = bodyText.replace(/\s+/g, " ").trim().slice(0, 80) || "empty response";
+        throw new Error(`${path} returned non-JSON content (${contentType || "unknown"}): ${compactBody}`);
+      }
+    }
+
+    function addLog(message, kind = "info") {
+      const entry = document.createElement("div");
+      entry.className = "log-entry";
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      if (kind === "error") {
+        entry.style.borderColor = "rgba(162, 60, 45, 0.25)";
+        entry.style.background = "rgba(162, 60, 45, 0.06)";
+      }
+      logFeed.prepend(entry);
+      while (logFeed.childElementCount > 20) {
+        logFeed.removeChild(logFeed.lastChild);
+      }
+    }
+
+    function statusPill(label, tone = "") {
+      const span = document.createElement("span");
+      span.className = `pill ${tone}`.trim();
+      span.textContent = label;
+      return span;
+    }
+
+    function formatPort(value) {
+      return value || "not mapped";
+    }
+
+    function formatMeasure(value, digits = 2) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) {
+        return "?";
+      }
+      return number.toFixed(digits).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function kvCard(label, value) {
+      const card = document.createElement("div");
+      card.className = "kv";
+      card.innerHTML = `${label}<strong>${value}</strong>`;
+      return card;
+    }
+
+    function button(label, className, onClick) {
+      const el = document.createElement("button");
+      el.textContent = label;
+      el.className = className;
+      el.addEventListener("click", onClick);
+      return el;
+    }
+
+    async function postJson(path, body = {}) {
+      const url = bridgeUrl(path);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body),
+      });
+      const payload = await readJsonResponse(response, path).catch((error) => {
+        if (!response.ok) {
+          throw error;
+        }
+        return {};
+      });
+      if (!response.ok) {
+        const message = payload.message || `${path} failed with ${response.status}`;
+        throw new Error(message);
+      }
+      return payload;
+    }
+
+    async function runAction(path, body, successMessage) {
+      try {
+        const payload = await postJson(path, body);
+        addLog(payload.message || successMessage || `Ran ${path}`);
+      } catch (error) {
+        addLog(error.message || String(error), "error");
+      } finally {
+        await refreshState();
+      }
+    }
+
+    function renderHero(snapshot) {
+      const hero = document.getElementById("hero-status");
+      hero.innerHTML = "";
+      const passive = snapshot.passive_mode?.running;
+      const arduinoConnected = snapshot.arduino?.connected;
+      hero.append(
+        statusPill(`${snapshot.plotter_count} mapped plotter${snapshot.plotter_count === 1 ? "" : "s"}`),
+        statusPill(`${snapshot.connectable_ports.length} ready`, snapshot.connectable_ports.length ? "good" : "warn"),
+        statusPill(`Passive ${passive ? "running" : "stopped"}`, passive ? "good" : "warn"),
+        statusPill(`Arduino ${arduinoConnected ? "connected" : "offline"}`, arduinoConnected ? "good" : "bad")
+      );
+    }
+
+    function renderSummary(snapshot) {
+      const summaryGrid = document.getElementById("summary-grid");
+      summaryGrid.innerHTML = "";
+
+      const active = snapshot.active_guided_area_mode || {};
+      const passive = snapshot.passive_mode || {};
+      const arduino = snapshot.arduino || {};
+
+      summaryGrid.append(
+        kvCard("Detected Ports", snapshot.detected_ports.length || "0"),
+        kvCard("Connectable", snapshot.connectable_ports.length || "0"),
+        kvCard("Busy", snapshot.busy_ports.length || "0"),
+        kvCard("Arduino Port", formatPort(arduino.port || arduino.connected_port || arduino.configured_port || arduino.selected_port)),
+        kvCard("Passive Seed", passive.session_seed ?? "idle"),
+        kvCard("Packed Area", `${active.area_width_in}" × ${active.area_height_in}" / ${active.columns} × ${active.rows}`),
+      );
+    }
+
+    function summarizeActiveArea(plotter, active) {
+      const activeArea = plotter.active_area || {};
+      const columns = Math.max(1, Number(active.columns) || 1);
+      const rows = Math.max(1, Number(active.rows) || 1);
+      const slotCount = Math.max(1, Number(active.slot_count) || (columns * rows));
+      const rawNextSlotIndex = Number(activeArea.next_slot_index);
+      const nextSlotIndex = clamp(
+        Number.isFinite(rawNextSlotIndex) ? rawNextSlotIndex : 0,
+        0,
+        Math.max(0, slotCount - 1)
+      );
+      const cyclesCompleted = Math.max(0, Number(activeArea.cycles_completed) || 0);
+      const rawSlotPreviews = Array.isArray(activeArea.slot_previews) ? activeArea.slot_previews : [];
+      const slotPreviews = Array.from({ length: slotCount }, (_, slotIndex) => {
+        const preview = rawSlotPreviews[slotIndex];
+        return preview && typeof preview.svg === "string" ? preview : null;
+      });
+      const filledCount = slotPreviews.reduce((count, preview) => count + (preview ? 1 : 0), 0);
+
+      return {
+        columns,
+        rows,
+        slotCount,
+        nextSlotIndex,
+        cyclesCompleted,
+        slotPreviews,
+        filledCount,
+      };
+    }
+
+    function buildActiveAreaSlotGrid(plotter, active) {
+      const summary = summarizeActiveArea(plotter, active);
+      const slotGrid = document.createElement("div");
+      slotGrid.className = "area-slot-grid";
+      slotGrid.style.gridTemplateColumns = `repeat(${summary.columns}, minmax(0, 1fr))`;
+
+      for (let slotIndex = 0; slotIndex < summary.slotCount; slotIndex += 1) {
+        const slot = document.createElement("div");
+        const preview = summary.slotPreviews[slotIndex];
+        const isNext = slotIndex === summary.nextSlotIndex;
+        if (preview) {
+          slot.classList.add("filled");
+        } else if (isNext) {
+          slot.classList.add("next");
+        }
+        slot.className = `area-slot ${slot.className}`.trim();
+
+        const slotIndexEl = document.createElement("div");
+        slotIndexEl.className = "area-slot-index";
+        slotIndexEl.textContent = `Slot ${slotIndex + 1}`;
+
+        const slotFigure = document.createElement("div");
+        slotFigure.className = "area-slot-figure";
+        if (preview?.svg) {
+          slotFigure.innerHTML = preview.svg;
+        } else {
+          const placeholder = document.createElement("div");
+          placeholder.className = "area-slot-placeholder";
+          placeholder.textContent = isNext ? "Next guided kolam lands here." : "Waiting for a kolam.";
+          slotFigure.append(placeholder);
+        }
+
+        const slotCopy = document.createElement("div");
+        slotCopy.className = "area-slot-copy";
+
+        const slotLabelEl = document.createElement("div");
+        slotLabelEl.className = "area-slot-label";
+        slotLabelEl.textContent = preview ? "Placed" : (isNext ? "Next" : "Waiting");
+
+        const slotStateEl = document.createElement("div");
+        slotStateEl.className = "area-slot-state";
+        slotStateEl.textContent = preview
+          ? "Kolam preview stored for this slot"
+          : (isNext ? "Next guided kolam placement" : "Waiting for this cycle");
+
+        slotCopy.append(slotLabelEl, slotStateEl);
+        slot.append(slotIndexEl, slotFigure, slotCopy);
+        slotGrid.append(slot);
+      }
+
+      return {
+        slotGrid,
+        summary,
+      };
+    }
+
+    function buildActiveAreaPreviewCard(plotter, active) {
+      const card = document.createElement("article");
+      card.className = "area-preview-card";
+
+      const top = document.createElement("div");
+      top.className = "area-preview-top";
+
+      const title = document.createElement("div");
+      title.className = "area-preview-title";
+
+      const heading = document.createElement("h3");
+      heading.textContent = `Plotter ${plotter.plotter_label}`;
+      title.append(heading);
+
+      const { slotGrid, summary } = buildActiveAreaSlotGrid(plotter, active);
+
+      const metaLine = document.createElement("div");
+      metaLine.className = "meta-line";
+      metaLine.textContent =
+        `${summary.filledCount}/${summary.slotCount} kolam preview${summary.filledCount === 1 ? "" : "s"} shown in the current cycle\n` +
+        `${summary.cyclesCompleted} completed prototype area cycle${summary.cyclesCompleted === 1 ? "" : "s"}`;
+      title.append(metaLine);
+
+      const status = document.createElement("div");
+      status.className = "status-strip";
+      status.append(
+        statusPill(plotter.status, plotter.status === "ready" ? "good" : plotter.status === "busy" ? "warn" : "bad"),
+        statusPill(`Next slot ${summary.nextSlotIndex + 1}/${summary.slotCount}`),
+      );
+
+      top.append(title, status);
+      card.append(top, slotGrid);
+      return card;
+    }
+
+    function renderActiveArea(snapshot) {
+      const previewGrid = document.getElementById("active-area-preview-grid");
+      const meta = document.getElementById("active-area-meta");
+      previewGrid.innerHTML = "";
+
+      const active = snapshot.active_guided_area_mode || {};
+      const columns = Math.max(1, Number(active.columns) || 1);
+      const rows = Math.max(1, Number(active.rows) || 1);
+
+      if (!active.enabled) {
+        meta.textContent = "Active guided area mode is disabled.";
+        const empty = document.createElement("div");
+        empty.className = "area-preview-empty";
+        empty.textContent = "The 3 x 2 prototype area preview appears when active guided area mode is enabled.";
+        previewGrid.append(empty);
+        return;
+      }
+
+      meta.textContent =
+        `${formatMeasure(active.area_width_in)}" × ${formatMeasure(active.area_height_in)}" prototype area` +
+        ` • ${columns} × ${rows} slots` +
+        ` • ${formatMeasure(active.cell_size_in)}" cell` +
+        ` • ${formatMeasure(active.gap_in)}" gap`;
+
+      if (!snapshot.plotters.length) {
+        const empty = document.createElement("div");
+        empty.className = "area-preview-empty";
+        empty.textContent = "No mapped plotters are currently visible to the bridge.";
+        previewGrid.append(empty);
+        return;
+      }
+
+      for (const plotter of snapshot.plotters) {
+        previewGrid.append(buildActiveAreaPreviewCard(plotter, active));
+      }
+    }
+
+    function previewContent(plotter) {
+      const preview = plotter.passive?.next_preview;
+      if (preview?.svg) {
+        return preview.svg;
+      }
+      const error = plotter.passive?.preview_error;
+      const message = error
+        ? `Preview unavailable:\n${error}`
+        : plotter.passive?.running
+          ? "Waiting for passive preview..."
+          : "Passive preview appears when a passive session is running.";
+      return `<div class="preview-placeholder">${message}</div>`;
+    }
+
+    function renderPlotters(snapshot) {
+      const grid = document.getElementById("plotters-grid");
+      grid.innerHTML = "";
+      const active = snapshot.active_guided_area_mode || {};
+
+      if (!snapshot.plotters.length) {
+        const panel = document.createElement("section");
+        panel.className = "panel";
+        panel.innerHTML = "<h2>No Plotters</h2><p class='meta-line'>No mapped plotters are currently visible to the bridge.</p>";
+        grid.append(panel);
+        return;
+      }
+
+      for (const plotter of snapshot.plotters) {
+        const node = document.getElementById("plotter-card-template").content.firstElementChild.cloneNode(true);
+        node.querySelector("h3").textContent = `Plotter ${plotter.plotter_label}`;
+
+        const strip = node.querySelector(".status-strip");
+        strip.append(
+          statusPill(plotter.status, plotter.status === "ready" ? "good" : plotter.status === "busy" ? "warn" : "bad"),
+          statusPill(`Servo ${plotter.servo_mode || "unknown"}`, plotter.servo_mode === "marker" ? "good" : plotter.servo_mode === "erase" ? "warn" : ""),
+          statusPill(`Toggle ${plotter.toggle_command || "n/a"}`)
+        );
+
+        const kv = node.querySelector(".kv-grid");
+        const activeArea = plotter.active_area || {};
+        const passive = plotter.passive || {};
+        kv.append(
+          kvCard("Port", formatPort(plotter.port)),
+          kvCard("Configured Port", formatPort(plotter.configured_port)),
+          kvCard("Detected Port", formatPort(plotter.detected_port)),
+          kvCard("Active Slot", `${(activeArea.next_slot_index ?? 0) + 1}/${activeArea.slot_count ?? 1}`),
+          kvCard("Passive Count", passive.patterns_drawn ?? "idle"),
+          kvCard("Cycle Count", activeArea.cycles_completed ?? 0),
+        );
+
+        const buttons = node.querySelector(".button-stack");
+        buttons.append(
+          button("Pen Down", "", () => runAction("/pen-down", {plotter_index: plotter.plotter_index}, `Pen down on plotter ${plotter.plotter_label}`)),
+          button("Pen Up", "", () => runAction("/pen-up", {plotter_index: plotter.plotter_index}, `Pen up on plotter ${plotter.plotter_label}`)),
+          button("Servo Toggle", "", () => runAction("/arduino/servo-toggle", {plotter_index: plotter.plotter_index}, `Servo toggled for plotter ${plotter.plotter_label}`)),
+          button("Servo Marker", "", () => runAction("/arduino/servo-mode", {plotter_index: plotter.plotter_index, mode: "marker"}, `Servo marker for plotter ${plotter.plotter_label}`)),
+          button("Servo Erase", "warn", () => runAction("/arduino/servo-mode", {plotter_index: plotter.plotter_index, mode: "erase"}, `Servo erase for plotter ${plotter.plotter_label}`)),
+          button("Erase Trace", "warn", () => runAction("/erase-trace", {plotter_index: plotter.plotter_index}, `Passive-mode erase trace demo on plotter ${plotter.plotter_label}`)),
+          button("Disable", "bad", () => runAction("/disable-motors", {plotter_index: plotter.plotter_index}, `Disabled plotter ${plotter.plotter_label}`)),
+        );
+
+        const plotterAreaFrame = node.querySelector(".plotter-area-frame");
+        const { slotGrid, summary } = buildActiveAreaSlotGrid(plotter, active);
+        const plotterAreaMeta = document.createElement("div");
+        plotterAreaMeta.className = "meta-line";
+        plotterAreaMeta.style.marginBottom = "10px";
+        plotterAreaMeta.textContent =
+          `${summary.filledCount}/${summary.slotCount} slot preview${summary.filledCount === 1 ? "" : "s"} shown` +
+          ` • next ${summary.nextSlotIndex + 1}/${summary.slotCount}`;
+        plotterAreaFrame.append(plotterAreaMeta, slotGrid);
+
+        node.querySelector(".preview-frame").innerHTML = previewContent(plotter);
+        grid.append(node);
+      }
+    }
+
+    function renderMeta(snapshot) {
+      const active = snapshot.active_guided_area_mode || {};
+      const passive = snapshot.passive_mode || {};
+      const arduino = snapshot.arduino || {};
+      const slotCount = active.slot_count ?? 0;
+      bridgeMeta.textContent =
+        `Dashboard using bridge ${bridgeOrigin}\n` +
+        `Host ${snapshot.host}:${snapshot.port}\n` +
+        `Packed area ${active.area_width_in}" × ${active.area_height_in}" at (${active.origin_x_in}", ${active.origin_y_in}") with ${active.columns} × ${active.rows} layout\n` +
+        `Erase trace over ${slotCount} packed slot${slotCount === 1 ? "" : "s"} | Passive ${passive.running ? `running on ${passive.ports.join(", ")}` : "stopped"}\n` +
+        `Arduino ${arduino.connected ? `connected on ${arduino.port || arduino.connected_port}` : "not connected"}`;
+    }
+
+    function render(snapshot) {
+      renderHero(snapshot);
+      renderSummary(snapshot);
+      renderActiveArea(snapshot);
+      renderPlotters(snapshot);
+      renderMeta(snapshot);
+    }
+
+    async function refreshState() {
+      if (state.requestInFlight) {
+        return;
+      }
+      state.requestInFlight = true;
+      try {
+        const path = "/dashboard/state";
+        const response = await fetch(bridgeUrl(path));
+        const payload = await readJsonResponse(response, path);
+        if (!response.ok) {
+          throw new Error(payload.message || `${path} failed with ${response.status}`);
+        }
+        state.snapshot = payload;
+        render(payload);
+      } catch (error) {
+        addLog(`State refresh failed: ${error.message || error}`, "error");
+      } finally {
+        state.requestInFlight = false;
+      }
+    }
+
+    function bindHeroActions() {
+      document.querySelectorAll("[data-action]").forEach((el) => {
+        el.addEventListener("click", async () => {
+          const action = el.getAttribute("data-action");
+          if (action === "refresh") {
+            await refreshState();
+            return;
+          }
+          if (action === "arduino-connect") {
+            await runAction("/arduino/connect", {}, "Arduino connected");
+            return;
+          }
+          if (action === "arduino-disconnect") {
+            await runAction("/arduino/disconnect", {}, "Arduino disconnected");
+            return;
+          }
+          if (action === "servo-toggle-all") {
+            await runAction("/arduino/servo-toggle", {}, "All servos toggled");
+            return;
+          }
+          if (action === "pen-down-all") {
+            await runAction("/pen-down", {}, "Pen down on all ready plotters");
+            return;
+          }
+          if (action === "pen-up-all") {
+            await runAction("/pen-up", {}, "Pen up on all ready plotters");
+            return;
+          }
+          if (action === "erase-all") {
+            await runAction("/erase-trace", {}, "Passive-mode erase trace demo on all ready plotters");
+            return;
+          }
+          if (action === "disable-all") {
+            await runAction("/disable-motors", {}, "Disabled all ready plotters");
+            return;
+          }
+          if (action === "passive-start") {
+            await runAction("/passive-mode/start", {}, "Passive mode started");
+            return;
+          }
+          if (action === "passive-stop") {
+            await runAction("/passive-mode/stop", {}, "Passive mode stopped");
+          }
+        });
+      });
+    }
+
+    bindHeroActions();
+    addLog(`Dashboard connected to ${bridgeOrigin}`);
+    refreshState();
+    state.pollHandle = window.setInterval(refreshState, 2000);
+  </script>
+</body>
+</html>

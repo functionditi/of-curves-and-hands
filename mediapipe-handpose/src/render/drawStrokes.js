@@ -1,0 +1,1 @@
+// User stroke rendering routines.

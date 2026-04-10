@@ -1,0 +1,1852 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Client - MediaPipe HandPose Guided Kolam</title>
+
+  <style>
+    @font-face {
+      font-family: "PP Mori";
+      src: url("./assets/fonts/PPMori/PPMori-Regular.otf") format("opentype");
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "PP Mori";
+      src: url("./assets/fonts/PPMori/PPMori-RegularItalic.otf") format("opentype");
+      font-weight: 400;
+      font-style: italic;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "PP Mori";
+      src: url("./assets/fonts/PPMori/PPMori-Semibold.otf") format("opentype");
+      font-weight: 600;
+      font-style: normal;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "PP Mori";
+      src: url("./assets/fonts/PPMori/PPMori-Black.otf") format("opentype");
+      font-weight: 800;
+      font-style: normal;
+      font-display: swap;
+    }
+
+    :root {
+      --font-ui: "PP Mori", "Avenir Next", "Segoe UI", sans-serif;
+      --page-bg: #EF633F;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: var(--page-bg);
+      overflow: hidden;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-ui);
+      position: relative;
+      isolation: isolate;
+    }
+
+    #output {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+    }
+
+    #status {
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(5, 10, 20, 0.68);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+      color: #fff;
+      z-index: 2;
+      max-width: min(92vw, 430px);
+      pointer-events: none;
+      box-sizing: border-box;
+      backdrop-filter: blur(10px);
+    }
+
+    #status-label {
+      margin-bottom: 6px;
+      color: rgba(255, 226, 125, 0.92);
+      font: 800 11px/1 var(--font-ui);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #status-text {
+      color: #fff;
+      font: 600 15px/1.32 var(--font-ui);
+    }
+
+    @media (max-width: 720px) {
+      #status {
+        max-width: calc(100vw - 24px);
+      }
+    }
+
+    #plotter-lightbox {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(6, 8, 16, 0.72);
+      z-index: 3;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+
+    #plotter-lightbox.visible {
+      display: flex;
+    }
+
+    #plotter-panel {
+      width: min(82vw, 720px);
+      max-height: min(80vh, 760px);
+      background: #F2EBC4;
+      border: 2px solid rgba(15, 24, 48, 0.16);
+      border-radius: 24px;
+      box-sizing: border-box;
+      padding: 28px 32px 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #plotter-title {
+      margin: 0;
+      color: #732C2C;
+      font: 600 32px/1.02 var(--font-ui);
+      letter-spacing: -0.02em;
+      text-align: left;
+    }
+
+    #plotter-message {
+      color: #732C2C;
+      font: 600 17px/1.3 var(--font-ui);
+      text-align: left;
+      min-height: 1.3em;
+    }
+
+    #plotter-preview-shell {
+      background: #fff;
+      border: 1.5px solid rgba(15, 24, 48, 0.12);
+      border-radius: 18px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 320px;
+      flex: 1;
+    }
+
+    #plotter-preview {
+      display: block;
+      max-width: 100%;
+      max-height: min(46vh, 460px);
+      object-fit: contain;
+    }
+
+    #plotter-footer {
+      color: #732C2C;
+      font: 600 18px/1.2 var(--font-ui);
+      text-align: left;
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="output"></canvas>
+  <div id="status" aria-live="polite">
+    <div id="status-label">Live Status</div>
+    <div id="status-text">Starting camera...</div>
+  </div>
+  <div id="plotter-lightbox">
+    <div id="plotter-panel">
+      <h2 id="plotter-title">Sending Kolam...</h2>
+      <div id="plotter-message"></div>
+      <div id="plotter-preview-shell">
+        <img id="plotter-preview" alt="Final kolam preview" />
+      </div>
+      <div id="plotter-footer"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    const PAGE_BG = "#EF633F";
+    const TASKS_VISION_VERSION = "0.10.22-rc.20250304";
+    const VISION_BUNDLE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/vision_bundle.mjs`;
+    const WASM_ROOT = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/wasm`;
+    const HAND_MODEL_URL =
+      "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],
+      [0, 5], [5, 6], [6, 7], [7, 8],
+      [5, 9], [9, 10], [10, 11], [11, 12],
+      [9, 13], [13, 14], [14, 15], [15, 16],
+      [13, 17], [17, 18], [18, 19], [19, 20],
+      [0, 17],
+    ];
+
+    const GRID_SIZE_MIN = 2;
+    const GRID_SIZE_MAX = 4;
+    const GRID_MARGIN_RATIO = 0.2;
+    const GRID_SAFE_PADDING_PX = 40;
+
+    const PINCH_START_RATIO = 0.45;
+    const PINCH_END_RATIO = 0.62;
+    const PINCH_SMOOTHING = 0.38;
+
+    const SNAP_RADIUS_PX = 26;
+    const DOT_LOCK_RATIO = 0.42;
+    const START_DOT_LOCK_RATIO = 0.78;
+    const NEXT_DOT_LOCK_RATIO = 0.92;
+    const EDGE_COOLDOWN_MS = 110;
+    const EDGE_REPEAT_COOLDOWN_MS = 240;
+    const FIST_FINGER_CURL_RATIO = 1.18;
+    const FIST_THUMB_PALM_RATIO = 1.35;
+    const FIST_THUMB_INDEX_RATIO = 1.1;
+    const FIST_HOLD_MS = 700;
+    const KOLAM_REVEAL_DELAY_MS = 100;
+    const KOLAM_SKELETON_FADE_MS = 800;
+    const PLOTTER_EXPORT_SIZE_IN = 4;
+    const PLOTTER_TRIGGER_COOLDOWN_MS = 1200;
+    const LIGHTBOX_DURATION_MS = 7000;
+    const PLOTTER_BRIDGE_URL = "http://127.0.0.1:8765";
+    const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+    const PASSIVE_MODE_STATUS = "Passive mode is running. Show a hand or press any key to return to active mode.";
+    const NEXT_DOT_COLOR = "#8DB9F2";
+
+    const READY_STATUS = "Show one hand. Pinch thumb + index near an unvisited white dot to start the skeleton.";
+    const NEXT_BRANCH_STATUS = "Pinch near an unvisited white dot to add another skeleton branch, or hold a closed fist when finished.";
+    const ACTIVE_BRANCH_STATUS = "Keep pinching and move to neighboring dots to build the skeleton. Release the pinch to end this branch.";
+    const ALL_VISITED_STATUS = "All dots have been visited. Hold a closed fist to send the kolam, or press C to clear.";
+    const BLOCKED_BRANCH_STATUS = "That branch is blocked. Move to an unvisited dot to start a new branch, or hold a closed fist when finished.";
+
+    const canvas = document.getElementById("output");
+    const statusTextEl = document.getElementById("status-text");
+    const lightboxEl = document.getElementById("plotter-lightbox");
+    const lightboxTitleEl = document.getElementById("plotter-title");
+    const lightboxMessageEl = document.getElementById("plotter-message");
+    const lightboxPreviewEl = document.getElementById("plotter-preview");
+    const lightboxFooterEl = document.getElementById("plotter-footer");
+    const ctx = canvas.getContext("2d");
+
+    const video = document.createElement("video");
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+
+    let handLandmarker = null;
+    let results = null;
+    let lastVideoTime = -1;
+    let cssWidth = window.innerWidth;
+    let cssHeight = window.innerHeight;
+    let dpr = window.devicePixelRatio || 1;
+    let statusText = "";
+
+    let isPinching = false;
+    let isDrawingKolam = false;
+    let fistLatched = false;
+    let fistStartedAtMs = 0;
+    let lastPlotTriggerAtMs = -Infinity;
+    let currentPlotRequestId = 0;
+    let lightboxVisible = false;
+    let lightboxEndsAtMs = 0;
+    let lightboxMessage = "";
+    let lightboxAfterStatus = "";
+    let exportCount = 0;
+    let passiveModeState = "active";
+    let passiveModeRequestId = 0;
+    let lastUserActivityAtMs = performance.now();
+    let currentGridSize = GRID_SIZE_MIN;
+    let smoothedPoint = null;
+    let pinchPoint = null;
+    let hoverDotIndex = -1;
+
+    let activeDotIndex = null;
+    let activeLastVector = null;
+    let activeBranchPath = [];
+    let activeBranchEdgeCount = 0;
+    let lastEdgeAtMs = 0;
+    let lastEdgePairKey = "";
+
+    const framework = [];
+    const capArcs = [];
+    const visitedDots = new Set();
+    const visitedDotTimesMs = new Map();
+
+    function setStatus(text) {
+      if (text === statusText) return;
+      statusText = text;
+      statusTextEl.textContent = text;
+    }
+
+    function pickRandomGridSize(excludeSize = null) {
+      const choices = [];
+      for (let size = GRID_SIZE_MIN; size <= GRID_SIZE_MAX; size += 1) {
+        if (size !== excludeSize) {
+          choices.push(size);
+        }
+      }
+
+      if (choices.length === 0) {
+        return GRID_SIZE_MIN;
+      }
+
+      return choices[Math.floor(Math.random() * choices.length)];
+    }
+
+    async function postBridgeJson(path, body = undefined) {
+      const options = {
+        method: "POST",
+      };
+
+      if (body !== undefined) {
+        options.headers = {
+          "Content-Type": "application/json",
+        };
+        options.body = JSON.stringify(body);
+      }
+
+      const response = await fetch(`${PLOTTER_BRIDGE_URL}${path}`, options);
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    }
+
+    function noteUserActivity(reason = "interaction") {
+      lastUserActivityAtMs = performance.now();
+      if (passiveModeState === "running") {
+        void stopPassiveMode(reason);
+      }
+    }
+
+    async function sendBridgeControl(path, successPrefix) {
+      try {
+        const { response, data } = await postBridgeJson(path);
+        const message = data?.message || `Bridge error (${response.status})`;
+
+        if (!response.ok) {
+          setStatus(`${successPrefix}: ${message}`);
+          return;
+        }
+
+        setStatus(`${successPrefix}: ${message}`);
+      } catch (error) {
+        console.error(error);
+        setStatus(`${successPrefix}: could not reach plotter bridge`);
+      }
+    }
+
+    async function startPassiveMode() {
+      if (passiveModeState !== "active" || isDrawingKolam || lightboxVisible) {
+        return;
+      }
+
+      passiveModeState = "starting";
+      const requestId = passiveModeRequestId + 1;
+      passiveModeRequestId = requestId;
+      clearGuidedKolam(true);
+      setStatus("No activity for 3 minutes. Starting passive mode...");
+
+      try {
+        const { response, data } = await postBridgeJson("/passive-mode/start", {});
+        if (requestId !== passiveModeRequestId) {
+          return;
+        }
+
+        if (!response.ok || data?.status === "error") {
+          passiveModeState = "active";
+          lastUserActivityAtMs = performance.now();
+          setStatus(`${data?.message || `Passive mode error (${response.status})`} ${READY_STATUS}`);
+          return;
+        }
+
+        if (data?.status === "done" || data?.status === "already_running") {
+          passiveModeState = "running";
+          setStatus(data?.message || PASSIVE_MODE_STATUS);
+          return;
+        }
+
+        passiveModeState = "active";
+        lastUserActivityAtMs = performance.now();
+        setStatus(`${data?.message || "Passive mode did not start."} ${READY_STATUS}`);
+      } catch (error) {
+        if (requestId !== passiveModeRequestId) {
+          return;
+        }
+        console.error(error);
+        passiveModeState = "active";
+        lastUserActivityAtMs = performance.now();
+        setStatus(`Passive mode could not reach the plotter bridge. ${READY_STATUS}`);
+      }
+    }
+
+    async function stopPassiveMode(reason = "activity") {
+      if (passiveModeState !== "running" && passiveModeState !== "starting") {
+        return;
+      }
+
+      passiveModeState = "stopping";
+      const requestId = passiveModeRequestId + 1;
+      passiveModeRequestId = requestId;
+      setStatus("Returning to active mode...");
+
+      try {
+        const { response, data } = await postBridgeJson("/passive-mode/stop", { reason });
+        if (requestId !== passiveModeRequestId) {
+          return;
+        }
+
+        passiveModeState = "active";
+        lastUserActivityAtMs = performance.now();
+        if (!response.ok || data?.status === "error") {
+          setStatus(`Passive mode stop failed. ${READY_STATUS}`);
+          return;
+        }
+
+        setStatus(`${data?.message || "Active mode is ready."} ${READY_STATUS}`);
+      } catch (error) {
+        if (requestId !== passiveModeRequestId) {
+          return;
+        }
+        console.error(error);
+        passiveModeState = "active";
+        lastUserActivityAtMs = performance.now();
+        setStatus(`Could not stop passive mode cleanly. ${READY_STATUS}`);
+      }
+    }
+
+    function maybeStartPassiveMode() {
+      if (passiveModeState !== "active" || isDrawingKolam || lightboxVisible) {
+        return;
+      }
+
+      if (performance.now() - lastUserActivityAtMs >= IDLE_TIMEOUT_MS) {
+        void startPassiveMode();
+      }
+    }
+
+    function resizeCanvas() {
+      cssWidth = window.innerWidth;
+      cssHeight = window.innerHeight;
+      dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(cssWidth * dpr);
+      canvas.height = Math.round(cssHeight * dpr);
+      canvas.style.width = `${cssWidth}px`;
+      canvas.style.height = `${cssHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function getDrawRect() {
+      const videoAspect = video.videoWidth / video.videoHeight;
+      const canvasAspect = cssWidth / cssHeight;
+      let drawWidth;
+      let drawHeight;
+      let drawX;
+      let drawY;
+
+      if (videoAspect > canvasAspect) {
+        drawHeight = cssHeight;
+        drawWidth = drawHeight * videoAspect;
+        drawX = (cssWidth - drawWidth) / 2;
+        drawY = 0;
+      } else {
+        drawWidth = cssWidth;
+        drawHeight = drawWidth / videoAspect;
+        drawX = 0;
+        drawY = (cssHeight - drawHeight) / 2;
+      }
+
+      return { drawX, drawY, drawWidth, drawHeight };
+    }
+
+    function getGridGeometry(drawX, drawY, drawWidth, drawHeight) {
+      const visibleLeft = Math.max(0, drawX);
+      const visibleTop = Math.max(0, drawY);
+      const visibleRight = Math.min(cssWidth, drawX + drawWidth);
+      const visibleBottom = Math.min(cssHeight, drawY + drawHeight);
+
+      const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+      const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+      const outerMargin = Math.max(
+        GRID_SAFE_PADDING_PX,
+        Math.min(visibleWidth, visibleHeight) * GRID_MARGIN_RATIO
+      );
+
+      const innerWidth = Math.max(0, visibleWidth - outerMargin * 2);
+      const innerHeight = Math.max(0, visibleHeight - outerMargin * 2);
+      const side = Math.min(innerWidth, innerHeight);
+
+      const startX = visibleLeft + (visibleWidth - side) / 2;
+      const startY = visibleTop + (visibleHeight - side) / 2;
+      const gridWidth = side;
+      const gridHeight = side;
+      const stepX = gridWidth / Math.max(1, currentGridSize - 1);
+      const stepY = gridHeight / Math.max(1, currentGridSize - 1);
+      return { startX, startY, gridWidth, gridHeight, stepX, stepY };
+    }
+
+    function getGridData(drawX, drawY, drawWidth, drawHeight) {
+      const geometry = getGridGeometry(drawX, drawY, drawWidth, drawHeight);
+      const pullis = [];
+
+      if (geometry.gridWidth <= 0 || geometry.gridHeight <= 0) {
+        return {
+          ...geometry,
+          pullis,
+          styleSpacing: 0,
+          lockRadius: 0,
+        };
+      }
+
+      for (let row = 0; row < currentGridSize; row += 1) {
+        for (let col = 0; col < currentGridSize; col += 1) {
+          pullis.push({
+            x: geometry.startX + col * geometry.stepX,
+            y: geometry.startY + row * geometry.stepY,
+          });
+        }
+      }
+
+      const styleSpacing = Math.min(geometry.stepX, geometry.stepY);
+      const lockRadius = Math.max(10, styleSpacing * DOT_LOCK_RATIO);
+
+      return {
+        ...geometry,
+        pullis,
+        styleSpacing,
+        lockRadius,
+      };
+    }
+
+    function drawKolamGrid(grid) {
+      if (grid.gridWidth <= 0 || grid.gridHeight <= 0) return;
+
+      const dotRadius = Math.max(1.8, Math.min(grid.stepX, grid.stepY) * 0.08);
+      const nextDotIndices = activeDotIndex !== null
+        ? new Set(getUnvisitedAdjacentDotIndices(activeDotIndex))
+        : null;
+      for (let i = 0; i < grid.pullis.length; i += 1) {
+        const dot = grid.pullis[i];
+        const isVisited = visitedDots.has(i);
+        const isNextDot = !!nextDotIndices?.has(i);
+        ctx.beginPath();
+        ctx.arc(dot.x, dot.y, dotRadius, 0, Math.PI * 2);
+        ctx.fillStyle = isVisited
+          ? "rgba(255, 226, 125, 0.22)"
+          : isNextDot
+            ? NEXT_DOT_COLOR
+            : "rgba(255, 255, 255, 0.7)";
+        ctx.fill();
+      }
+    }
+
+    function toCanvasPoint(point, drawRect) {
+      return {
+        x: drawRect.drawX + (1 - point.x) * drawRect.drawWidth,
+        y: drawRect.drawY + point.y * drawRect.drawHeight,
+      };
+    }
+
+    function snapPointToKolamGuide(point, grid) {
+      if (grid.gridWidth <= 0 || grid.gridHeight <= 0 || grid.stepX <= 0 || grid.stepY <= 0) {
+        return point;
+      }
+
+      const latticeStepX = grid.stepX / 2;
+      const latticeStepY = grid.stepY / 2;
+      const maxX = grid.startX + grid.gridWidth;
+      const maxY = grid.startY + grid.gridHeight;
+
+      const snappedIx = Math.round((point.x - grid.startX) / latticeStepX);
+      const snappedIy = Math.round((point.y - grid.startY) / latticeStepY);
+      const snapX = grid.startX + snappedIx * latticeStepX;
+      const snapY = grid.startY + snappedIy * latticeStepY;
+
+      if (snapX < grid.startX || snapX > maxX || snapY < grid.startY || snapY > maxY) {
+        return point;
+      }
+
+      const dist = Math.hypot(snapX - point.x, snapY - point.y);
+      if (dist > SNAP_RADIUS_PX) {
+        return point;
+      }
+
+      return {
+        x: snapX,
+        y: snapY,
+      };
+    }
+
+    function selectBestPinchHand(hands) {
+      let best = null;
+
+      for (const hand of hands) {
+        const thumbTip = hand?.[4];
+        const indexTip = hand?.[8];
+        const wrist = hand?.[0];
+        const middleMcp = hand?.[9];
+        if (!thumbTip || !indexTip || !wrist || !middleMcp) continue;
+
+        const pinchDistance = Math.hypot(
+          thumbTip.x - indexTip.x,
+          thumbTip.y - indexTip.y
+        );
+        const handScale = Math.max(
+          0.0001,
+          Math.hypot(wrist.x - middleMcp.x, wrist.y - middleMcp.y)
+        );
+        const pinchRatio = pinchDistance / handScale;
+
+        if (!best || pinchRatio < best.pinchRatio) {
+          best = { indexTip, pinchRatio };
+        }
+      }
+
+      return best;
+    }
+
+    function landmarkDistance(a, b) {
+      if (!a || !b) {
+        return Infinity;
+      }
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function isFingerCurled(hand, tipIndex, pipIndex, mcpIndex) {
+      const wrist = hand?.[0];
+      const tip = hand?.[tipIndex];
+      const pip = hand?.[pipIndex];
+      const mcp = hand?.[mcpIndex];
+      if (!wrist || !tip || !pip || !mcp) {
+        return false;
+      }
+
+      const tipToMcp = landmarkDistance(tip, mcp);
+      const pipToMcp = Math.max(0.0001, landmarkDistance(pip, mcp));
+      const tipToWrist = landmarkDistance(tip, wrist);
+      const pipToWrist = landmarkDistance(pip, wrist);
+
+      return (
+        tipToMcp < pipToMcp * FIST_FINGER_CURL_RATIO
+        || tipToWrist < pipToWrist * 0.98
+      );
+    }
+
+    function isFist(hand) {
+      const wrist = hand?.[0];
+      const indexMcp = hand?.[5];
+      const middleMcp = hand?.[9];
+      const pinkyMcp = hand?.[17];
+      if (!wrist || !indexMcp || !middleMcp || !pinkyMcp) {
+        return false;
+      }
+
+      const handScale = Math.max(
+        0.0001,
+        landmarkDistance(wrist, middleMcp),
+        landmarkDistance(wrist, indexMcp),
+        landmarkDistance(wrist, pinkyMcp)
+      );
+
+      const curledCount = [
+        isFingerCurled(hand, 8, 6, 5),
+        isFingerCurled(hand, 12, 10, 9),
+        isFingerCurled(hand, 16, 14, 13),
+        isFingerCurled(hand, 20, 18, 17),
+      ].filter(Boolean).length;
+
+      const palmCenter = {
+        x: (wrist.x + indexMcp.x + middleMcp.x + pinkyMcp.x) / 4,
+        y: (wrist.y + indexMcp.y + middleMcp.y + pinkyMcp.y) / 4,
+      };
+
+      const thumbTip = hand?.[4];
+      const thumbToPalmRatio = landmarkDistance(thumbTip, palmCenter) / handScale;
+      const thumbToIndexRatio = landmarkDistance(thumbTip, indexMcp) / handScale;
+      const thumbClosed =
+        thumbToPalmRatio < FIST_THUMB_PALM_RATIO
+        || thumbToIndexRatio < FIST_THUMB_INDEX_RATIO;
+
+      return curledCount >= 3 && (thumbClosed || curledCount === 4);
+    }
+
+    function indexToRowCol(index) {
+      return {
+        row: Math.floor(index / currentGridSize),
+        col: index % currentGridSize,
+      };
+    }
+
+    function areAdjacentDotIndices(a, b) {
+      const aRC = indexToRowCol(a);
+      const bRC = indexToRowCol(b);
+      return Math.abs(aRC.row - bRC.row) + Math.abs(aRC.col - bRC.col) === 1;
+    }
+
+    function getVectorBetweenDots(fromIndex, toIndex) {
+      const fromRC = indexToRowCol(fromIndex);
+      const toRC = indexToRowCol(toIndex);
+      return [toRC.col - fromRC.col, toRC.row - fromRC.row];
+    }
+
+    function getAdjacentDotIndices(index) {
+      const { row, col } = indexToRowCol(index);
+      const adjacent = [];
+
+      if (row > 0) adjacent.push((row - 1) * currentGridSize + col);
+      if (col < currentGridSize - 1) adjacent.push(row * currentGridSize + col + 1);
+      if (row < currentGridSize - 1) adjacent.push((row + 1) * currentGridSize + col);
+      if (col > 0) adjacent.push(row * currentGridSize + col - 1);
+
+      return adjacent;
+    }
+
+    function findNearestDotIndex(point, pullis, maxDist) {
+      let bestIndex = -1;
+      let bestDist = maxDist;
+
+      for (let i = 0; i < pullis.length; i += 1) {
+        const dot = pullis[i];
+        const dist = Math.hypot(point.x - dot.x, point.y - dot.y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          bestIndex = i;
+        }
+      }
+
+      return bestIndex;
+    }
+
+    function findNearestUnvisitedDotIndex(point, pullis, maxDist) {
+      let bestIndex = -1;
+      let bestDist = maxDist;
+
+      for (let i = 0; i < pullis.length; i += 1) {
+        if (visitedDots.has(i)) continue;
+
+        const dot = pullis[i];
+        const dist = Math.hypot(point.x - dot.x, point.y - dot.y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          bestIndex = i;
+        }
+      }
+
+      return bestIndex;
+    }
+
+    function findNearestAdjacentDotIndex(point, grid, fromIndex, maxDist) {
+      let bestIndex = -1;
+      let bestDist = maxDist;
+
+      for (const index of getAdjacentDotIndices(fromIndex)) {
+        const dot = grid.pullis[index];
+        if (!dot) continue;
+
+        const dist = Math.hypot(point.x - dot.x, point.y - dot.y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          bestIndex = index;
+        }
+      }
+
+      return bestIndex;
+    }
+
+    function findNearestAdjacentUnvisitedDotIndex(point, grid, fromIndex, maxDist) {
+      let bestIndex = -1;
+      let bestDist = maxDist;
+
+      for (const index of getAdjacentDotIndices(fromIndex)) {
+        if (visitedDots.has(index)) continue;
+
+        const dot = grid.pullis[index];
+        if (!dot) continue;
+
+        const dist = Math.hypot(point.x - dot.x, point.y - dot.y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          bestIndex = index;
+        }
+      }
+
+      return bestIndex;
+    }
+
+    function getEdgePairKey(a, b) {
+      return a < b ? `${a}:${b}` : `${b}:${a}`;
+    }
+
+    function hasUnvisitedDots(grid) {
+      return grid.pullis.some((_, index) => !visitedDots.has(index));
+    }
+
+    function getPostBranchStatus(grid) {
+      return hasUnvisitedDots(grid) ? NEXT_BRANCH_STATUS : ALL_VISITED_STATUS;
+    }
+
+    function getUnvisitedAdjacentDotIndices(index) {
+      return getAdjacentDotIndices(index).filter((dotIndex) => !visitedDots.has(dotIndex));
+    }
+
+    function isActiveBranchBlocked() {
+      return activeDotIndex !== null && getUnvisitedAdjacentDotIndices(activeDotIndex).length === 0;
+    }
+
+    function markDotVisited(dotIndex, nowMs) {
+      visitedDots.add(dotIndex);
+      if (!visitedDotTimesMs.has(dotIndex)) {
+        visitedDotTimesMs.set(dotIndex, nowMs);
+      }
+    }
+
+    function getRevealAtMsForDots(dotIndices) {
+      let latestVisitMs = -Infinity;
+
+      for (const dotIndex of dotIndices) {
+        const visitedAtMs = visitedDotTimesMs.get(dotIndex);
+        if (typeof visitedAtMs !== "number") {
+          return Infinity;
+        }
+        latestVisitMs = Math.max(latestVisitMs, visitedAtMs);
+      }
+
+      return latestVisitMs + KOLAM_REVEAL_DELAY_MS;
+    }
+
+    function beginBranch(dotIndex, nowMs) {
+      if (visitedDots.has(dotIndex)) {
+        return false;
+      }
+
+      activeDotIndex = dotIndex;
+      activeLastVector = null;
+      activeBranchPath = [dotIndex];
+      activeBranchEdgeCount = 0;
+      lastEdgeAtMs = 0;
+      lastEdgePairKey = "";
+      markDotVisited(dotIndex, nowMs);
+      return true;
+    }
+
+    function addFrameworkEdge(nextDotIndex, nowMs) {
+      if (
+        activeDotIndex === null
+        || nextDotIndex === activeDotIndex
+        || visitedDots.has(nextDotIndex)
+      ) {
+        return false;
+      }
+
+      const currentDotIndex = activeDotIndex;
+      const edgePairKey = getEdgePairKey(currentDotIndex, nextDotIndex);
+      if (
+        edgePairKey === lastEdgePairKey
+        && nowMs - lastEdgeAtMs < EDGE_REPEAT_COOLDOWN_MS
+      ) {
+        return false;
+      }
+
+      const vector = getVectorBetweenDots(currentDotIndex, nextDotIndex);
+      framework.push({
+        x: currentDotIndex,
+        y: nextDotIndex,
+        reverse: false,
+        vector,
+        isBranchStart: activeBranchEdgeCount === 0,
+        revealAtMs: nowMs + KOLAM_REVEAL_DELAY_MS,
+      });
+
+      activeDotIndex = nextDotIndex;
+      activeLastVector = vector;
+      activeBranchPath.push(nextDotIndex);
+      activeBranchEdgeCount += 1;
+      markDotVisited(nextDotIndex, nowMs);
+      lastEdgeAtMs = nowMs;
+      lastEdgePairKey = edgePairKey;
+      return true;
+    }
+
+    function finalizeActiveBranch(nowMs = performance.now()) {
+      if (activeDotIndex === null) {
+        return;
+      }
+
+      let rAngle = 0;
+      if (activeLastVector) {
+        rAngle = Math.atan2(activeLastVector[1], activeLastVector[0]) + Math.PI;
+      }
+
+      const stop = activeBranchEdgeCount === 0 ? (9 * Math.PI) / 4 : (7 * Math.PI) / 4;
+      capArcs.push({
+        dotIndex: activeDotIndex,
+        angle: rAngle,
+        start: Math.PI / 4,
+        stop,
+        revealAtMs: nowMs + KOLAM_REVEAL_DELAY_MS,
+      });
+
+      let reverseRevealAtMs = nowMs + KOLAM_REVEAL_DELAY_MS * 2;
+      for (let i = activeBranchPath.length - 1; i > 0; i -= 1) {
+        const childIndex = activeBranchPath[i];
+        const parentIndex = activeBranchPath[i - 1];
+        framework.push({
+          x: childIndex,
+          y: parentIndex,
+          reverse: true,
+          vector: getVectorBetweenDots(childIndex, parentIndex),
+          isBranchStart: false,
+          revealAtMs: reverseRevealAtMs,
+        });
+        reverseRevealAtMs += KOLAM_REVEAL_DELAY_MS;
+      }
+
+      activeDotIndex = null;
+      activeLastVector = null;
+      activeBranchPath = [];
+      activeBranchEdgeCount = 0;
+      lastEdgeAtMs = 0;
+      lastEdgePairKey = "";
+    }
+
+    function clearGuidedKolam(silent = false, excludeSize = currentGridSize) {
+      currentGridSize = pickRandomGridSize(excludeSize);
+      framework.length = 0;
+      capArcs.length = 0;
+      visitedDots.clear();
+      visitedDotTimesMs.clear();
+      activeDotIndex = null;
+      activeLastVector = null;
+      activeBranchPath = [];
+      activeBranchEdgeCount = 0;
+      lastEdgeAtMs = 0;
+      lastEdgePairKey = "";
+      hoverDotIndex = -1;
+      isPinching = false;
+      fistLatched = false;
+      fistStartedAtMs = 0;
+      pinchPoint = null;
+      smoothedPoint = null;
+      if (!silent) {
+        setStatus(`Kolam cleared. ${READY_STATUS}`);
+      }
+    }
+
+    function updateLightboxCountdown() {
+      if (!lightboxVisible) {
+        return;
+      }
+
+      const remainingMs = Math.max(0, lightboxEndsAtMs - performance.now());
+      const secondsRemaining = Math.max(1, Math.ceil(remainingMs / 1000));
+      const footerText = `Draw another Kolam in ${secondsRemaining}...`;
+      lightboxFooterEl.textContent = footerText;
+
+      if (remainingMs <= 0) {
+        void closePlotterLightbox();
+      }
+    }
+
+    function openPlotterLightbox(title, message = "", previewSvg = "", afterStatus = "") {
+      lightboxVisible = true;
+      lightboxEndsAtMs = performance.now() + LIGHTBOX_DURATION_MS;
+      lightboxTitleEl.textContent = title;
+      lightboxMessage = message;
+      lightboxAfterStatus = afterStatus;
+      lightboxMessageEl.textContent = message;
+      if (previewSvg) {
+        lightboxPreviewEl.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(previewSvg)}`;
+      } else {
+        lightboxPreviewEl.removeAttribute("src");
+      }
+      lightboxEl.classList.add("visible");
+      updateLightboxCountdown();
+    }
+
+    async function closePlotterLightbox() {
+      if (!lightboxVisible) {
+        return;
+      }
+
+      lightboxVisible = false;
+      lightboxEndsAtMs = 0;
+      lightboxMessage = "";
+      lightboxEl.classList.remove("visible");
+      lightboxMessageEl.textContent = "";
+      lightboxFooterEl.textContent = "";
+      lightboxPreviewEl.removeAttribute("src");
+      currentPlotRequestId = 0;
+      clearGuidedKolam(true);
+      isDrawingKolam = false;
+      results = null;
+      lastUserActivityAtMs = performance.now();
+      try {
+        await video.play();
+      } catch (error) {
+        console.warn("Could not resume video feed.", error);
+      }
+
+      if (lightboxAfterStatus) {
+        setStatus(lightboxAfterStatus);
+      } else {
+        setStatus(`Ready for a new kolam. ${READY_STATUS}`);
+      }
+      lightboxAfterStatus = "";
+    }
+
+    function formatNum(value) {
+      return Number(value.toFixed(2));
+    }
+
+    function updateGuidedKolamFromHands(hands, drawRect, grid) {
+      if (isDrawingKolam || passiveModeState !== "active") {
+        isPinching = false;
+        hoverDotIndex = -1;
+        pinchPoint = null;
+        smoothedPoint = null;
+        return;
+      }
+
+      const nowMs = performance.now();
+      const hasKolamPath =
+        framework.length > 0 || capArcs.length > 0 || activeDotIndex !== null;
+      const candidate = selectBestPinchHand(hands);
+      const pinchThreshold = isPinching ? PINCH_END_RATIO : PINCH_START_RATIO;
+      const shouldPinch = !!candidate && candidate.pinchRatio <= pinchThreshold;
+
+      const primaryHand = hands?.[0] || null;
+      const fistNow =
+        !!primaryHand
+        && hasKolamPath
+        && (nowMs - lastPlotTriggerAtMs) > PLOTTER_TRIGGER_COOLDOWN_MS
+        && isFist(primaryHand);
+
+      if (fistNow) {
+        if (fistStartedAtMs === 0) {
+          fistStartedAtMs = nowMs;
+        }
+
+        const fistHeldMs = nowMs - fistStartedAtMs;
+        if (!fistLatched && fistHeldMs >= FIST_HOLD_MS) {
+          finalizeActiveBranch(nowMs);
+          isPinching = false;
+          hoverDotIndex = -1;
+          pinchPoint = null;
+          smoothedPoint = null;
+          lastPlotTriggerAtMs = nowMs;
+          void drawKolamOnPlotter(grid);
+          fistLatched = true;
+        } else if (!fistLatched) {
+          const holdProgress = Math.min(100, Math.round((fistHeldMs / FIST_HOLD_MS) * 100));
+          setStatus(`Hold a closed fist to send this kolam to the next plotter (${holdProgress}%).`);
+        }
+        return;
+      }
+
+      fistStartedAtMs = 0;
+      fistLatched = false;
+
+      if (shouldPinch) {
+        const rawPoint = toCanvasPoint(candidate.indexTip, drawRect);
+        const snappedPoint = snapPointToKolamGuide(rawPoint, grid);
+        const startLockRadius = Math.max(12, grid.lockRadius * START_DOT_LOCK_RATIO);
+        const nextLockRadius = Math.max(14, grid.lockRadius * NEXT_DOT_LOCK_RATIO);
+
+        if (!smoothedPoint) {
+          smoothedPoint = { ...snappedPoint };
+        } else {
+          smoothedPoint.x += (snappedPoint.x - smoothedPoint.x) * PINCH_SMOOTHING;
+          smoothedPoint.y += (snappedPoint.y - smoothedPoint.y) * PINCH_SMOOTHING;
+        }
+
+        pinchPoint = { x: smoothedPoint.x, y: smoothedPoint.y };
+        const nearestDotIndex = findNearestDotIndex(
+          pinchPoint,
+          grid.pullis,
+          activeDotIndex === null ? startLockRadius : nextLockRadius
+        );
+        const nearestUnvisitedDotIndex = activeDotIndex === null
+          ? findNearestUnvisitedDotIndex(pinchPoint, grid.pullis, startLockRadius)
+          : -1;
+        let branchBlockedThisFrame = false;
+        let nearestAdjacentDotIndex = -1;
+
+        if (activeDotIndex === null) {
+          hoverDotIndex = nearestUnvisitedDotIndex;
+          if (hoverDotIndex !== -1) {
+            const started = beginBranch(hoverDotIndex, nowMs);
+            hoverDotIndex = -1;
+            if (started && isActiveBranchBlocked()) {
+              finalizeActiveBranch(nowMs);
+              branchBlockedThisFrame = true;
+            }
+          }
+        } else {
+          const currentDotIndex = activeDotIndex;
+          const availableNextDots = getUnvisitedAdjacentDotIndices(currentDotIndex);
+          if (availableNextDots.length === 0) {
+            finalizeActiveBranch(nowMs);
+            hoverDotIndex = -1;
+            branchBlockedThisFrame = true;
+          } else {
+            nearestAdjacentDotIndex = findNearestAdjacentDotIndex(
+              pinchPoint,
+              grid,
+              currentDotIndex,
+              nextLockRadius
+            );
+            const candidateNextUnvisitedDotIndex = findNearestAdjacentUnvisitedDotIndex(
+              pinchPoint,
+              grid,
+              currentDotIndex,
+              nextLockRadius
+            );
+
+            const revisitsActiveBranch =
+              nearestAdjacentDotIndex !== -1
+              && activeBranchPath.includes(nearestAdjacentDotIndex);
+            hoverDotIndex = revisitsActiveBranch ? -1 : candidateNextUnvisitedDotIndex;
+
+            if (hoverDotIndex !== -1 && nowMs - lastEdgeAtMs >= EDGE_COOLDOWN_MS) {
+              const added = addFrameworkEdge(hoverDotIndex, nowMs);
+              if (added && isActiveBranchBlocked()) {
+                finalizeActiveBranch(nowMs);
+                hoverDotIndex = -1;
+                branchBlockedThisFrame = true;
+              }
+            }
+          }
+        }
+
+        if (branchBlockedThisFrame) {
+          setStatus(hasUnvisitedDots(grid) ? BLOCKED_BRANCH_STATUS : ALL_VISITED_STATUS);
+        } else if (activeDotIndex === null) {
+          if (nearestDotIndex !== -1 && nearestUnvisitedDotIndex === -1) {
+            setStatus("That dot is already visited. Move to an unvisited white dot to start a new branch.");
+          } else if (hasUnvisitedDots(grid)) {
+            setStatus("Pinch closer to an unvisited white dot to start a branch.");
+          } else {
+            setStatus(ALL_VISITED_STATUS);
+          }
+        } else if (
+          nearestDotIndex !== -1
+          && nearestDotIndex !== activeDotIndex
+          && !areAdjacentDotIndices(activeDotIndex, nearestDotIndex)
+        ) {
+          setStatus("Only neighboring dots are allowed while a branch is active.");
+        } else if (
+          nearestAdjacentDotIndex !== -1
+          && activeBranchPath.includes(nearestAdjacentDotIndex)
+          && nearestAdjacentDotIndex !== activeDotIndex
+        ) {
+          setStatus("Release to end the branch. Backtracking is added automatically.");
+        } else if (
+          nearestAdjacentDotIndex !== -1
+          && nearestAdjacentDotIndex !== activeDotIndex
+          && visitedDots.has(nearestAdjacentDotIndex)
+        ) {
+          setStatus("That neighboring dot is already visited. Move toward an unvisited neighbor.");
+        } else if (hoverDotIndex === -1) {
+          setStatus("Keep pinching and move toward one of the unvisited neighboring dots.");
+        } else {
+          setStatus(ACTIVE_BRANCH_STATUS);
+        }
+      } else {
+        if (isPinching) {
+          finalizeActiveBranch(nowMs);
+        }
+
+        hoverDotIndex = -1;
+        pinchPoint = null;
+        smoothedPoint = null;
+        setStatus(framework.length > 0 || capArcs.length > 0 ? getPostBranchStatus(grid) : READY_STATUS);
+      }
+
+      isPinching = shouldPinch;
+    }
+
+    function approxEqual(a, b, tol = 1e-6) {
+      return Math.abs(a - b) <= tol;
+    }
+
+    function drawDiagonalByAngle(angleDeg, midX, midY, spacing, reverse = false) {
+      let angle;
+      if (approxEqual(angleDeg, 90) || approxEqual(angleDeg, -90)) {
+        angle = reverse ? (3 * Math.PI) / 4 : Math.PI / 4;
+      } else {
+        angle = reverse ? Math.PI / 4 : (3 * Math.PI) / 4;
+      }
+
+      const lineLen = spacing * 0.33;
+      const x1 = midX - Math.cos(angle) * lineLen;
+      const y1 = midY - Math.sin(angle) * lineLen;
+      const x2 = midX + Math.cos(angle) * lineLen;
+      const y2 = midY + Math.sin(angle) * lineLen;
+      return { x1, y1, x2, y2 };
+    }
+
+    function loopArc(dot, angle, start, stop, spacing) {
+      return {
+        cx: dot.x,
+        cy: dot.y,
+        radius: (spacing * 0.66) / 2,
+        rotation: angle,
+        start,
+        stop,
+      };
+    }
+
+    function applyLoops(aDiff, rAngle, dot, spacing) {
+      if (approxEqual(aDiff, 0)) {
+        return [
+          {
+            kind: "arc",
+            arc: loopArc(dot, rAngle, Math.PI / 4, (3 * Math.PI) / 4, spacing),
+          },
+        ];
+      }
+
+      if (approxEqual(aDiff, -90) || approxEqual(aDiff, 270)) {
+        return [
+          {
+            kind: "arc",
+            arc: loopArc(dot, rAngle, Math.PI / 4, (5 * Math.PI) / 4, spacing),
+          },
+        ];
+      }
+
+      if (approxEqual(aDiff, 90) || approxEqual(aDiff, -270)) {
+        return [
+          {
+            kind: "arc",
+            arc: loopArc(dot, rAngle + Math.PI / 2, Math.PI / 4, (5 * Math.PI) / 4, spacing),
+          },
+        ];
+      }
+
+      return [];
+    }
+
+    function buildGuidedCommands(grid) {
+      const commands = [];
+      const angleArray = [];
+      const spacing = grid.styleSpacing;
+
+      if (!spacing || grid.pullis.length === 0) {
+        return commands;
+      }
+
+      // Port of DFSKolamGenerator.render_commands from the Python plotter sketch.
+      for (let i = 0; i < framework.length; i += 1) {
+        const edge = framework[i];
+        const dot1 = grid.pullis[edge.x];
+        const dot2 = grid.pullis[edge.y];
+        if (!dot1 || !dot2) continue;
+
+        const midX = (dot1.x + dot2.x) / 2;
+        const midY = (dot1.y + dot2.y) / 2;
+        const rAngle = Math.atan2(dot2.y - dot1.y, dot2.x - dot1.x);
+        const angleDeg = (rAngle * 180) / Math.PI;
+        const edgeRevealAtMs = edge.revealAtMs ?? getRevealAtMsForDots([edge.x, edge.y]);
+        const prevEdge = i > 0 ? framework[i - 1] : null;
+        const prevEdgeRevealAtMs = prevEdge
+          ? (prevEdge.revealAtMs ?? getRevealAtMsForDots([prevEdge.x, prevEdge.y]))
+          : edgeRevealAtMs;
+        const turnRevealAtMs = prevEdge
+          ? Math.max(edgeRevealAtMs, prevEdgeRevealAtMs)
+          : edgeRevealAtMs;
+        angleArray.push(angleDeg);
+
+        if (edge.isBranchStart) {
+          commands.push({
+            kind: "line",
+            line: drawDiagonalByAngle(angleDeg, midX, midY, spacing, true),
+            revealAtMs: edgeRevealAtMs,
+          });
+          commands.push({
+            kind: "arc",
+            arc: loopArc(dot1, rAngle, Math.PI / 4, (7 * Math.PI) / 4, spacing),
+            revealAtMs: edgeRevealAtMs,
+          });
+          continue;
+        }
+
+        const prevA = i > 0 ? angleArray[i - 1] : 0;
+        const aDiff = angleDeg - prevA;
+
+        if (i % 2 === 1) {
+          if (!(approxEqual(aDiff, 90) || approxEqual(aDiff, -270))) {
+            commands.push(
+              ...applyLoops(aDiff, rAngle, dot1, spacing).map((command) => ({
+                ...command,
+                revealAtMs: turnRevealAtMs,
+              }))
+            );
+          }
+          commands.push({
+            kind: "line",
+            line: drawDiagonalByAngle(angleDeg, midX, midY, spacing, false),
+            revealAtMs: edgeRevealAtMs,
+          });
+        } else {
+          if (approxEqual(aDiff, 90) || approxEqual(aDiff, -270)) {
+            commands.push(
+              ...applyLoops(aDiff, rAngle, dot1, spacing).map((command) => ({
+                ...command,
+                revealAtMs: turnRevealAtMs,
+              }))
+            );
+          } else if (approxEqual(aDiff, 0)) {
+            commands.push(
+              ...applyLoops(0, rAngle + Math.PI, dot1, spacing).map((command) => ({
+                ...command,
+                revealAtMs: turnRevealAtMs,
+              }))
+            );
+          }
+          commands.push({
+            kind: "line",
+            line: drawDiagonalByAngle(angleDeg, midX, midY, spacing, true),
+            revealAtMs: edgeRevealAtMs,
+          });
+        }
+      }
+
+      for (const capInfo of capArcs) {
+        const dot = grid.pullis[capInfo.dotIndex];
+        if (!dot) continue;
+        commands.push({
+          kind: "arc",
+          arc: loopArc(dot, capInfo.angle, capInfo.start, capInfo.stop, spacing),
+          revealAtMs: capInfo.revealAtMs ?? getRevealAtMsForDots([capInfo.dotIndex]),
+        });
+      }
+
+      return commands;
+    }
+
+    function buildGuidedKolamSvg(grid) {
+      const commands = buildGuidedCommands(grid);
+      if (commands.length === 0) {
+        return null;
+      }
+
+      const allPoints = [];
+      for (const dot of grid.pullis) {
+        allPoints.push({ x: dot.x, y: dot.y });
+      }
+
+      const sampledArcs = [];
+      for (const cmd of commands) {
+        if (cmd.kind === "line" && cmd.line) {
+          allPoints.push({ x: cmd.line.x1, y: cmd.line.y1 });
+          allPoints.push({ x: cmd.line.x2, y: cmd.line.y2 });
+        } else if (cmd.kind === "arc" && cmd.arc) {
+          const pts = sampleArcPoints(cmd.arc);
+          sampledArcs.push(pts);
+          allPoints.push(...pts);
+        }
+      }
+
+      if (allPoints.length === 0) {
+        return null;
+      }
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const point of allPoints) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+
+      const padding = Math.max(12, grid.styleSpacing * 0.4);
+      const width = maxX - minX + padding * 2;
+      const height = maxY - minY + padding * 2;
+      const shiftX = padding - minX;
+      const shiftY = padding - minY;
+
+      const dotRadius = Math.max(1.4, grid.styleSpacing * 0.05);
+      const strokeWidth = Math.max(1.6, grid.styleSpacing * 0.085);
+
+      const dotElements = grid.pullis
+        .map((dot) => (
+          `<circle cx="${formatNum(dot.x + shiftX)}" cy="${formatNum(dot.y + shiftY)}" r="${formatNum(dotRadius)}" />`
+        ))
+        .join("\n    ");
+
+      const strokeElements = [];
+      let arcSampleIndex = 0;
+      for (const cmd of commands) {
+        if (cmd.kind === "line" && cmd.line) {
+          strokeElements.push(
+            `<line x1="${formatNum(cmd.line.x1 + shiftX)}" y1="${formatNum(cmd.line.y1 + shiftY)}" x2="${formatNum(cmd.line.x2 + shiftX)}" y2="${formatNum(cmd.line.y2 + shiftY)}" />`
+          );
+        } else if (cmd.kind === "arc" && cmd.arc) {
+          const pts = sampledArcs[arcSampleIndex] || sampleArcPoints(cmd.arc);
+          arcSampleIndex += 1;
+          if (pts.length < 2) continue;
+          const pointsAttr = pts
+            .map((point) => `${formatNum(point.x + shiftX)},${formatNum(point.y + shiftY)}`)
+            .join(" ");
+          strokeElements.push(`<polyline points="${pointsAttr}" />`);
+        }
+      }
+
+      const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${PLOTTER_EXPORT_SIZE_IN}in" height="${PLOTTER_EXPORT_SIZE_IN}in" viewBox="0 0 ${formatNum(width)} ${formatNum(height)}">
+  <g fill="#101010" fill-opacity="0.7">
+    ${dotElements}
+  </g>
+  <g fill="none" stroke="#0b55ff" stroke-width="${formatNum(strokeWidth)}" stroke-linecap="round" stroke-linejoin="round">
+    ${strokeElements.join("\n    ")}
+  </g>
+</svg>`;
+
+      exportCount += 1;
+      const now = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `guided-kolam-${now}-${String(exportCount).padStart(2, "0")}.svg`;
+      return { svg, filename };
+    }
+
+    async function drawKolamOnPlotter(grid) {
+      if (isDrawingKolam) {
+        return;
+      }
+
+      const requestId = currentPlotRequestId + 1;
+      currentPlotRequestId = requestId;
+      const payload = buildGuidedKolamSvg(grid);
+      if (!payload) {
+        setStatus("No kolam exists yet. Pinch near a white dot first.");
+        return;
+      }
+
+      isDrawingKolam = true;
+      lastUserActivityAtMs = performance.now();
+      results = null;
+      openPlotterLightbox("Sending Kolam...", "Preparing kolam for plotter...", payload.svg);
+      setStatus("Sending kolam to plotter...");
+      try {
+        video.pause();
+      } catch (error) {
+        console.warn("Could not pause video feed.", error);
+      }
+
+      try {
+        const response = await fetch(`${PLOTTER_BRIDGE_URL}/plot-svg`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (requestId !== currentPlotRequestId) {
+          return;
+        }
+
+        if (!response.ok) {
+          const message = data?.message || `Plotter bridge error (${response.status})`;
+          if (response.status === 409 || data?.status === "busy") {
+            lightboxTitleEl.textContent = "Plotter Busy";
+            lightboxMessage = message;
+            lightboxMessageEl.textContent = lightboxMessage;
+            lightboxAfterStatus = `${message} ${READY_STATUS}`;
+            return;
+          }
+
+          lightboxTitleEl.textContent = "Plot Failed";
+          lightboxMessage = message;
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = `${message} ${READY_STATUS}`;
+          return;
+        }
+
+        if (data.status === "done") {
+          const assignedLabel = data.assigned_plotter_label || "A";
+          lightboxTitleEl.textContent = `Drawing on Plotter ${assignedLabel}!`;
+          lightboxMessage = data.message || `Kolam sent to Plotter ${assignedLabel}.`;
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = `Ready for a new kolam. ${READY_STATUS}`;
+        } else if (data.status === "plotter_unavailable") {
+          lightboxTitleEl.textContent = "Plotter Unavailable";
+          lightboxMessage = data.message || "AxiDraw was detected but could not be opened.";
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = `${lightboxMessage} ${READY_STATUS}`;
+        } else if (data.status === "no_plotter") {
+          lightboxTitleEl.textContent = "No Plotter Connected";
+          lightboxMessage = "No plotter connected.";
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = `No plotter connected. Grid cleared. ${READY_STATUS}`;
+        } else if (data.status === "multiple_plotters") {
+          lightboxTitleEl.textContent = "Too Many Plotters";
+          lightboxMessage = "Multiple plotters connected.";
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = data.message || "Too many plotters connected.";
+        } else if (data.status === "busy") {
+          lightboxTitleEl.textContent = "Plotter Busy";
+          lightboxMessage = "Plotter is busy.";
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = "Plotter is busy. Try again.";
+        } else {
+          lightboxTitleEl.textContent = "Plotter Response";
+          lightboxMessage = data.message || "Plotter response received.";
+          lightboxMessageEl.textContent = lightboxMessage;
+          lightboxAfterStatus = data.message || "Plotter response received.";
+        }
+      } catch (error) {
+        if (requestId !== currentPlotRequestId) {
+          return;
+        }
+        console.error(error);
+        lightboxTitleEl.textContent = "Take a look at the plotters on your left!";
+        lightboxMessage = error?.message || "Plotter bridge is offline. Start python3 plotter-bridge/app.py";
+        lightboxMessageEl.textContent = lightboxMessage;
+        lightboxAfterStatus = lightboxMessage;
+      } finally {
+        if (requestId === currentPlotRequestId) {
+          fistLatched = false;
+          fistStartedAtMs = 0;
+        }
+      }
+    }
+
+    function sampleArcPoints(arc, minSegments = 16) {
+      const span = Math.abs(arc.stop - arc.start);
+      const segments = Math.max(minSegments, Math.ceil(span / (Math.PI / 18)));
+      const points = [];
+
+      for (let i = 0; i <= segments; i += 1) {
+        const theta = arc.start + (arc.stop - arc.start) * (i / segments);
+        const localX = arc.radius * Math.cos(theta);
+        const localY = arc.radius * Math.sin(theta);
+
+        const rotatedX = Math.cos(arc.rotation) * localX - Math.sin(arc.rotation) * localY;
+        const rotatedY = Math.sin(arc.rotation) * localX + Math.cos(arc.rotation) * localY;
+
+        points.push({
+          x: arc.cx + rotatedX,
+          y: arc.cy + rotatedY,
+        });
+      }
+
+      return points;
+    }
+
+    function drawGuidedKolam(grid) {
+      const nowMs = performance.now();
+      const commands = buildGuidedCommands(grid);
+      const fullRevealAtMs = commands.reduce(
+        (latest, command) => Math.max(latest, command.revealAtMs ?? 0),
+        0
+      );
+      const skeletonFadeProgress =
+        commands.length > 0 && nowMs >= fullRevealAtMs
+          ? Math.min(1, (nowMs - fullRevealAtMs) / KOLAM_SKELETON_FADE_MS)
+          : 0;
+      const skeletonAlpha = 0.94 * (1 - skeletonFadeProgress);
+
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = `rgba(255, 221, 125, ${skeletonAlpha.toFixed(3)})`;
+      ctx.lineWidth = Math.max(2.2, grid.styleSpacing * 0.06);
+
+      if (skeletonAlpha > 0.01) {
+        for (const edge of framework) {
+          if (edge.reverse) continue;
+          const dot1 = grid.pullis[edge.x];
+          const dot2 = grid.pullis[edge.y];
+          if (!dot1 || !dot2) continue;
+
+          ctx.beginPath();
+          ctx.moveTo(dot1.x, dot1.y);
+          ctx.lineTo(dot2.x, dot2.y);
+          ctx.stroke();
+        }
+      }
+
+      const revealedCommands = commands.filter(
+        (command) => nowMs >= (command.revealAtMs ?? 0)
+      );
+
+      ctx.strokeStyle = "rgba(255, 221, 125, 0.95)";
+      ctx.lineWidth = Math.max(2, grid.styleSpacing * 0.09);
+
+      for (const cmd of revealedCommands) {
+        if (cmd.kind === "line" && cmd.line) {
+          ctx.beginPath();
+          ctx.moveTo(cmd.line.x1, cmd.line.y1);
+          ctx.lineTo(cmd.line.x2, cmd.line.y2);
+          ctx.stroke();
+        } else if (cmd.kind === "arc" && cmd.arc) {
+          const pts = sampleArcPoints(cmd.arc);
+          if (pts.length < 2) continue;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i += 1) {
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          ctx.stroke();
+        }
+      }
+
+      if (activeDotIndex !== null && grid.pullis[activeDotIndex]) {
+        const active = grid.pullis[activeDotIndex];
+        ctx.fillStyle = "rgba(255, 221, 125, 1)";
+        ctx.beginPath();
+        ctx.arc(active.x, active.y, Math.max(3.5, grid.styleSpacing * 0.07), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (pinchPoint) {
+        ctx.fillStyle = "rgba(255, 221, 125, 1)";
+        ctx.beginPath();
+        ctx.arc(pinchPoint.x, pinchPoint.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawDrawingOverlay() {
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `700 ${Math.max(24, Math.round(Math.min(cssWidth, cssHeight) * 0.08))}px monospace`;
+      ctx.fillStyle = "#ffe27d";
+      ctx.fillText("Drawing Kolam!", cssWidth / 2, cssHeight / 2);
+      ctx.restore();
+    }
+
+    function drawPassiveOverlay() {
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+      const title =
+        passiveModeState === "starting"
+          ? "Starting Passive Mode..."
+          : passiveModeState === "stopping"
+            ? "Returning to Active Mode..."
+            : "Passive Mode";
+      const message =
+        passiveModeState === "starting"
+          ? "Autonomous kolams are being handed to the plotters."
+          : passiveModeState === "stopping"
+            ? "Stopping autonomous kolams. One moment..."
+            : "Autonomous kolams are drawing. Show a hand or press any key to return.";
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffe27d";
+      ctx.font = `700 ${Math.max(26, Math.round(Math.min(cssWidth, cssHeight) * 0.072))}px "PP Mori", sans-serif`;
+      ctx.fillText(title, cssWidth / 2, cssHeight / 2 - 18);
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      ctx.font = `500 ${Math.max(14, Math.round(Math.min(cssWidth, cssHeight) * 0.024))}px "PP Mori", sans-serif`;
+      ctx.fillText(message, cssWidth / 2, cssHeight / 2 + 24);
+      ctx.restore();
+    }
+
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+    }
+
+    async function createLandmarker() {
+      const vision = await import(VISION_BUNDLE_URL);
+      const fileset = await vision.FilesetResolver.forVisionTasks(WASM_ROOT);
+
+      try {
+        handLandmarker = await vision.HandLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath: HAND_MODEL_URL,
+            delegate: "GPU",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+        });
+      } catch (error) {
+        console.warn("GPU init failed. Falling back to CPU.", error);
+        handLandmarker = await vision.HandLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath: HAND_MODEL_URL,
+            delegate: "CPU",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+        });
+      }
+    }
+
+    function drawHands(hands, drawRect) {
+      for (const hand of hands) {
+        if (!hand) continue;
+
+        ctx.strokeStyle = "#fff7ef";
+        ctx.lineWidth = 3.5;
+        for (const [a, b] of HAND_CONNECTIONS) {
+          const pa = hand[a];
+          const pb = hand[b];
+          if (!pa || !pb) continue;
+          const ax = drawRect.drawX + (1 - pa.x) * drawRect.drawWidth;
+          const ay = drawRect.drawY + pa.y * drawRect.drawHeight;
+          const bx = drawRect.drawX + (1 - pb.x) * drawRect.drawWidth;
+          const by = drawRect.drawY + pb.y * drawRect.drawHeight;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+        }
+
+        ctx.fillStyle = "#2a1209";
+        for (const point of hand) {
+          const x = drawRect.drawX + (1 - point.x) * drawRect.drawWidth;
+          const y = drawRect.drawY + point.y * drawRect.drawHeight;
+          ctx.beginPath();
+          ctx.arc(x, y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    function drawFrame() {
+      if (!video.videoWidth || !video.videoHeight) {
+        return;
+      }
+      updateLightboxCountdown();
+      maybeStartPassiveMode();
+
+      const drawRect = getDrawRect();
+      const grid = getGridData(drawRect.drawX, drawRect.drawY, drawRect.drawWidth, drawRect.drawHeight);
+
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      ctx.fillStyle = PAGE_BG;
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+      drawKolamGrid(grid);
+
+      const allHands = results?.landmarks || [];
+      if (allHands.length > 0) {
+        noteUserActivity("hand");
+      }
+
+      const interactiveHands = isDrawingKolam || passiveModeState !== "active" ? [] : allHands;
+      updateGuidedKolamFromHands(interactiveHands, drawRect, grid);
+      drawGuidedKolam(grid);
+      if (passiveModeState !== "active" && !lightboxVisible) {
+        drawPassiveOverlay();
+      } else if (isDrawingKolam && !lightboxVisible) {
+        drawDrawingOverlay();
+      }
+
+      if (!lightboxVisible && allHands.length > 0) {
+        drawHands(allHands, drawRect);
+      }
+    }
+
+    function loop() {
+      if (handLandmarker && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        results = handLandmarker.detectForVideo(video, performance.now());
+      }
+
+      drawFrame();
+      requestAnimationFrame(loop);
+    }
+
+    async function init() {
+      try {
+        resizeCanvas();
+        setStatus("Starting camera...");
+        await setupCamera();
+        setStatus("Loading hand model...");
+        await createLandmarker();
+        clearGuidedKolam(true, null);
+        lastUserActivityAtMs = performance.now();
+        setStatus(READY_STATUS);
+        loop();
+      } catch (error) {
+        console.error(error);
+        setStatus("Failed: camera/model setup error");
+      }
+    }
+
+    window.addEventListener("resize", resizeCanvas);
+    for (const eventName of ["pointerdown", "pointermove", "touchstart"]) {
+      window.addEventListener(eventName, () => {
+        noteUserActivity(eventName);
+      }, { passive: true });
+    }
+    window.addEventListener("keydown", (event) => {
+      if (event.repeat) {
+        return;
+      }
+
+      noteUserActivity("keyboard");
+      if (passiveModeState !== "active") {
+        return;
+      }
+
+      if (event.key === "c" || event.key === "C") {
+        clearGuidedKolam();
+        return;
+      }
+
+      if (event.key === "d" || event.key === "D") {
+        void sendBridgeControl("/pen-down", "Pen down");
+        return;
+      }
+
+      if (event.key === "u" || event.key === "U") {
+        void sendBridgeControl("/pen-up", "Pen up");
+        return;
+      }
+
+      if (event.key === "x" || event.key === "X") {
+        void sendBridgeControl("/disable-motors", "Disable motors");
+      }
+    });
+
+    init();
+  </script>
+</body>
+
+</html>

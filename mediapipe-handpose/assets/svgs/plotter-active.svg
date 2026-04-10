@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 676.3726 471.9229">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #fff;
+      }
+
+      .cls-2 {
+        fill: #d6e0f1;
+      }
+</style>
+  </defs>
+  <rect width="676.3726" height="471.9229" fill="#0156fb"/>
+  <rect class="cls-2" x="61.7977" y="229.9425" width="553.4558" height="14.5273"/>
+  <rect class="cls-2" x="111.1762" y="278.0855" width="446.2264" height="11.6854"/>
+  <rect class="cls-2" x="111.1762" y="191.0325" width="446.2264" height="11.6854"/>
+  <rect class="cls-1" x="5.1249" y="207.6689" width="60.4563" height="56.0812" rx="6" ry="6"/>
+  <rect class="cls-1" x="612.6479" y="207.6689" width="60.4563" height="56.0812" rx="6" ry="6"/>
+  <rect class="cls-1" x="61.7977" y="169.7417" width="55.2453" height="35.9546" rx="6" ry="6"/>
+  <rect class="cls-1" x="61.7977" y="268.7011" width="55.2453" height="35.9546" rx="6" ry="6"/>
+  <rect class="cls-1" x="557.4027" y="169.7417" width="55.2453" height="35.9546" rx="6" ry="6"/>
+  <rect class="cls-1" x="557.4027" y="268.7011" width="55.2453" height="35.9546" rx="6" ry="6"/>
+  <rect class="cls-1" x="604.9499" y="262.8584" width="68.1543" height="42.1396" rx="6" ry="6"/>
+  <g>
+    <rect class="cls-2" x="11.4361" y="222.5027" width="414.1782" height="14.5273" transform="translate(-11.2411 448.2915) rotate(-90)"/>
+    <rect class="cls-2" x="20.8292" y="224.1713" width="446.2264" height="11.6854" transform="translate(13.9285 473.9564) rotate(-90)"/>
+    <rect class="cls-2" x="-30.0052" y="224.1713" width="446.2264" height="11.6854" transform="translate(-36.906 423.122) rotate(-90)"/>
+    <rect class="cls-1" x="172.2322" y="177.7272" width="92.5861" height="121.6779" rx="6" ry="6"/>
+    <rect class="cls-1" x="182.5615" y="3.9575" width="72.6037" height="18.7197" rx="6" ry="6"/>
+    <rect class="cls-1" x="182.5615" y="430.0221" width="72.6037" height="18.7197"/>
+    <rect class="cls-1" x="182.5615" y="448.7418" width="72.6037" height="18.7197" rx="6" ry="6"/>
+  </g>
+  <rect class="cls-1" x="38.6393" y="229.2063" width="72.6037" height="18.7197" rx="6" ry="6" transform="translate(-163.625 313.5072) rotate(-90)"/>
+  <rect class="cls-1" x="566.9862" y="229.2063" width="72.6037" height="18.7197" rx="6" ry="6" transform="translate(364.722 841.8542) rotate(-90)"/>
+</svg>
