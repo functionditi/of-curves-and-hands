@@ -184,6 +184,13 @@
       max-width: 18ch;
       font: 600 clamp(18px, 2vw, 32px)/1.26 var(--font-ui);
       letter-spacing: -0.02em;
+      opacity: 1;
+      transition: opacity 180ms ease-in-out;
+      will-change: opacity;
+    }
+
+    #status-text.is-fading {
+      opacity: 0;
     }
 
     #stage-panel {
@@ -446,7 +453,7 @@
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
     }
 
-    #plotter-preview {
+    x #plotter-preview {
       display: block;
       max-width: 100%;
       max-height: min(46vh, 460px);
@@ -607,6 +614,7 @@
     const PLOTTER_EXPORT_SIZE_IN = 4;
     const PLOTTER_TRIGGER_COOLDOWN_MS = 1200;
     const LIGHTBOX_DURATION_MS = 7000;
+    const STATUS_TEXT_FADE_MS = 180;
     const PLOTTER_BRIDGE_URL = "http://127.0.0.1:8765";
     const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
     const PASSIVE_MODE_STATUS = "Passive mode is running. Show a hand or press any key to return to active mode.";
@@ -614,10 +622,10 @@
     const ERASE_TRACE_ARMED_STATUS = "Erase trace mode armed. Press P to retrace the packed 3x2 area in erase mode.";
 
     const READY_STATUS = "Raise one hand to the camera! Pinch thumb + index near an unvisited pulli (dot) to start the kolam pattern.";
-    const NEXT_BRANCH_STATUS = "Pinch near an unvisited pulli (dot) to add another kolam branch, or hold a closed fist when finished.";
-    const ACTIVE_BRANCH_STATUS = "Keep pinching and move to neighboring pullis (dot) to build the skeleton. Release the pinch to end this branch.";
-    const ALL_VISITED_STATUS = "All pullis (dot) have been visited. Hold a closed fist to draw the kolam.";
-    const BLOCKED_BRANCH_STATUS = "That branch is blocked. Move to an unvisited dot to start a new branch, or hold a closed fist when finished.";
+    const NEXT_BRANCH_STATUS = "Release to end branch or find an unvisited dot. Make a fist anytime to draw your kolam.";
+    const ACTIVE_BRANCH_STATUS = "Keep pinching and move to neighboring pullis (dot) to build the skeleton. Release to end branch or find an unvisited dot. Make a fist anytime to draw your kolam.";
+    const ALL_VISITED_STATUS = "All pullis (dot) have been visited. Form a fist to draw your kolam.";
+    const BLOCKED_BRANCH_STATUS = "That branch is blocked. Move to an unvisited dot to start a new branch, or make a fist anytime to draw your kolam.";
 
     const canvas = document.getElementById("output");
     const stageViewportEl = document.getElementById("stage-viewport");
@@ -650,6 +658,7 @@
     let cssHeight = stageViewportEl.clientHeight || window.innerHeight;
     let dpr = window.devicePixelRatio || 1;
     let statusText = "";
+    let statusFadeTimeoutId = 0;
 
     let isPinching = false;
     let isDrawingKolam = false;
@@ -687,8 +696,24 @@
 
     function setStatus(text) {
       if (text === statusText) return;
-      statusText = text;
-      statusTextEl.textContent = text;
+      const nextText = text;
+      const isFirstStatus = !statusText;
+      statusText = nextText;
+
+      window.clearTimeout(statusFadeTimeoutId);
+
+      if (isFirstStatus || !statusTextEl.textContent) {
+        statusTextEl.classList.remove("is-fading");
+        statusTextEl.textContent = nextText;
+        return;
+      }
+
+      statusTextEl.classList.add("is-fading");
+      statusFadeTimeoutId = window.setTimeout(() => {
+        statusTextEl.textContent = nextText;
+        statusTextEl.classList.remove("is-fading");
+        statusFadeTimeoutId = 0;
+      }, STATUS_TEXT_FADE_MS);
     }
 
     function pickRandomGridSize(excludeSize = null) {
@@ -1413,8 +1438,8 @@
       }
       if (plotterSideCopyEl) {
         plotterSideCopyEl.textContent = normalizedLabel
-          ? `Plotter ${normalizedLabel} will be drawing your kolam.`
-          : "The plotter that will draw your kolam will light up here.";
+          ? `Look to plotter ${normalizedLabel} for your kolam!`
+          : "All plotters are busy right now!";
       }
       for (const plotterLabel of PLOTTER_LABELS) {
         const isActive = normalizedLabel === plotterLabel;
@@ -1527,7 +1552,7 @@
           fistLatched = true;
         } else if (!fistLatched) {
           const holdProgress = Math.min(100, Math.round((fistHeldMs / FIST_HOLD_MS) * 100));
-          setStatus(`Hold a closed fist to send this kolam to the next plotter (${holdProgress}%).`);
+          setStatus(`Make and hold a fist to draw your kolam (${holdProgress}%).`);
         }
         return;
       }
@@ -1610,12 +1635,12 @@
         if (branchBlockedThisFrame) {
           setStatus(hasUnvisitedDots(grid) ? BLOCKED_BRANCH_STATUS : ALL_VISITED_STATUS);
         } else if (activeDotIndex === null) {
-          if (nearestDotIndex !== -1 && nearestUnvisitedDotIndex === -1) {
+          if (!hasUnvisitedDots(grid)) {
+            setStatus("All pullis (dot) have been visited. Form a fist to draw your kolam instead.");
+          } else if (nearestDotIndex !== -1 && nearestUnvisitedDotIndex === -1) {
             setStatus("That dot is already visited. Move to an unvisited dot to start a new branch.");
-          } else if (hasUnvisitedDots(grid)) {
-            setStatus("Pinch closer to an unvisited dot to start a branch.");
           } else {
-            setStatus(ALL_VISITED_STATUS);
+            setStatus("Pinch closer to an unvisited dot to start a branch.");
           }
         } else if (
           nearestDotIndex !== -1
@@ -1628,7 +1653,7 @@
           && activeBranchPath.includes(nearestAdjacentDotIndex)
           && nearestAdjacentDotIndex !== activeDotIndex
         ) {
-          setStatus("Release to end the branch. Backtracking is added automatically.");
+          setStatus("Release to end branch or find an unvisited dot!");
         } else if (
           nearestAdjacentDotIndex !== -1
           && nearestAdjacentDotIndex !== activeDotIndex
