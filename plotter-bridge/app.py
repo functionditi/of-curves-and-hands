@@ -8,6 +8,7 @@ import importlib.util
 import html
 import json
 import math
+import mimetypes
 import os
 import random
 import signal
@@ -19,11 +20,41 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 import xml.etree.ElementTree as ET
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AXIDRAW_ROOT = REPO_ROOT / "AxiDraw_API_396"
+CLIENT_APP_ROOT = REPO_ROOT / "mediapipe-handpose"
+CLIENT_APP_ROOT_RESOLVED = CLIENT_APP_ROOT.resolve()
+
+
+def preferred_repo_python(repo_root: Path) -> Path | None:
+    current_python = Path(sys.executable)
+    for candidate in (
+        repo_root / ".venv" / "bin" / "python",
+        repo_root / ".venv" / "bin" / "python3",
+    ):
+        if candidate.exists() and candidate != current_python:
+            return candidate
+    return None
+
+
+def maybe_reexec_with_repo_python() -> None:
+    if __name__ != "__main__":
+        return
+    if os.environ.get("OF_CURVES_HANDS_REEXEC") == "1":
+        return
+    repo_python = preferred_repo_python(REPO_ROOT)
+    if repo_python is None:
+        return
+    env = os.environ.copy()
+    env["OF_CURVES_HANDS_REEXEC"] = "1"
+    os.execve(str(repo_python), [str(repo_python), __file__, *sys.argv[1:]], env)
+
+
+maybe_reexec_with_repo_python()
+
 if str(AXIDRAW_ROOT) not in sys.path:
     sys.path.insert(0, str(AXIDRAW_ROOT))
 
@@ -52,6 +83,7 @@ MAX_BODY_BYTES = 8_000_000
 STATE_LOCK = threading.Lock()
 BUSY_PORTS: set[str] = set()
 MAX_SUPPORTED_PLOTTERS = 4
+SERVO_CHANNEL_NAMES = "ABCD"
 SVG_NS = "http://www.w3.org/2000/svg"
 NEXT_PLOTTER_INDEX = 0
 PLOTTER_INDEX_BY_PORT: dict[str, int] = {}
@@ -92,6 +124,62 @@ ARDUINO_SERIAL = None
 ARDUINO_CONNECTED_PORT: str | None = None
 ARDUINO_BAUD_RATE = int(os.environ.get("ARDUINO_BAUD_RATE", "9600"))
 ARDUINO_PORT = os.environ.get("ARDUINO_PORT", "").strip() or None
+
+
+def normalize_servo_channel(channel_value: int) -> int:
+    return max(1, min(len(SERVO_CHANNEL_NAMES), int(channel_value)))
+
+
+def servo_channel_name(channel_value: int) -> str:
+    return SERVO_CHANNEL_NAMES[normalize_servo_channel(channel_value) - 1]
+
+
+def build_default_servo_channel_by_plotter() -> dict[int, int]:
+    # Current physical mounting:
+    # - logical plotter 1 -> servo channel 3 (C)
+    # - logical plotter 2 -> servo channel 1 (A)
+    # - logical plotter 3 -> servo channel 2 (B)
+    # - logical plotter 4 -> servo channel 4 (D)
+    defaults = {
+        1: 3,
+        2: 1,
+        3: 2,
+        4: 4,
+    }
+    return {
+        plotter_index: normalize_servo_channel(
+            int(os.environ.get(f"ARDUINO_PLOTTER_{plotter_index}_SERVO_CHANNEL", str(default_channel)))
+        )
+        for plotter_index, default_channel in defaults.items()
+    }
+
+
+ARDUINO_SERVO_CHANNEL_BY_PLOTTER = build_default_servo_channel_by_plotter()
+PLOTTER_INDEX_BY_ARDUINO_SERVO_CHANNEL = {
+    servo_channel: plotter_index
+    for plotter_index, servo_channel in ARDUINO_SERVO_CHANNEL_BY_PLOTTER.items()
+}
+
+
+def plotter_index_for_arduino_servo_channel(channel_value: int) -> int | None:
+    return PLOTTER_INDEX_BY_ARDUINO_SERVO_CHANNEL.get(normalize_servo_channel(channel_value))
+
+
+def default_arduino_toggle_command_for_plotter(plotter_index: int) -> str:
+    servo_channel = ARDUINO_SERVO_CHANNEL_BY_PLOTTER.get(plotter_index, plotter_index)
+    return f"t{normalize_servo_channel(servo_channel)}"
+
+
+def default_arduino_mode_command_for_plotter(plotter_index: int, mode: str) -> str:
+    normalized_plotter_index = max(1, min(MAX_SUPPORTED_PLOTTERS, int(plotter_index)))
+    normalized_mode = mode.strip().lower()
+    if normalized_mode == "marker":
+        return f"P{normalized_plotter_index}M"
+    if normalized_mode == "erase":
+        return f"P{normalized_plotter_index}E"
+    return f"P{normalized_plotter_index}T"
+
+
 ARDUINO_SERVO_UNKNOWN_MODE = "unknown"
 ARDUINO_SERVO_INITIAL_MODE = (
     os.environ.get("ARDUINO_SERVO_INITIAL_MODE", "marker").strip().lower() or "marker"
@@ -105,39 +193,46 @@ ARDUINO_READY_DELAY_SECONDS = float(os.environ.get("ARDUINO_READY_DELAY_SECONDS"
 ARDUINO_RESPONSE_TIMEOUT_SECONDS = float(os.environ.get("ARDUINO_RESPONSE_TIMEOUT_SECONDS", "0.75"))
 ARDUINO_COMMAND_SETTLE_SECONDS = float(os.environ.get("ARDUINO_COMMAND_SETTLE_SECONDS", "0.7"))
 ARDUINO_RESPONSE_IDLE_SECONDS = float(os.environ.get("ARDUINO_RESPONSE_IDLE_SECONDS", "0.15"))
-ARDUINO_TOGGLE_COMMAND = os.environ.get("ARDUINO_TOGGLE_COMMAND", "t1").strip() or "t1"
+ARDUINO_TOGGLE_COMMAND = (
+    os.environ.get("ARDUINO_TOGGLE_COMMAND", default_arduino_toggle_command_for_plotter(1)).strip()
+    or default_arduino_toggle_command_for_plotter(1)
+)
 ARDUINO_MARKER_ANGLE = int(os.environ.get("ARDUINO_MARKER_ANGLE", "0"))
 ARDUINO_ERASE_ANGLE = int(os.environ.get("ARDUINO_ERASE_ANGLE", "180"))
 ARDUINO_PLOTTER_TOGGLE_COMMANDS = {
-    1: os.environ.get("ARDUINO_PLOTTER_1_TOGGLE_COMMAND", "t1").strip() or "t1",
-    2: os.environ.get("ARDUINO_PLOTTER_2_TOGGLE_COMMAND", "t2").strip() or "t2",
-    3: os.environ.get("ARDUINO_PLOTTER_3_TOGGLE_COMMAND", "t3").strip() or "t3",
-    4: os.environ.get("ARDUINO_PLOTTER_4_TOGGLE_COMMAND", "t4").strip() or "t4",
+    1: os.environ.get("ARDUINO_PLOTTER_1_TOGGLE_COMMAND", default_arduino_toggle_command_for_plotter(1)).strip()
+    or default_arduino_toggle_command_for_plotter(1),
+    2: os.environ.get("ARDUINO_PLOTTER_2_TOGGLE_COMMAND", default_arduino_toggle_command_for_plotter(2)).strip()
+    or default_arduino_toggle_command_for_plotter(2),
+    3: os.environ.get("ARDUINO_PLOTTER_3_TOGGLE_COMMAND", default_arduino_toggle_command_for_plotter(3)).strip()
+    or default_arduino_toggle_command_for_plotter(3),
+    4: os.environ.get("ARDUINO_PLOTTER_4_TOGGLE_COMMAND", default_arduino_toggle_command_for_plotter(4)).strip()
+    or default_arduino_toggle_command_for_plotter(4),
 }
 ARDUINO_PLOTTER_SERVO_COMMANDS = {
     1: {
-        "marker": os.environ.get("ARDUINO_PLOTTER_1_MARKER_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[1]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[1],
-        "erase": os.environ.get("ARDUINO_PLOTTER_1_ERASE_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[1]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[1],
+        "marker": os.environ.get("ARDUINO_PLOTTER_1_MARKER_COMMAND", default_arduino_mode_command_for_plotter(1, "marker")).strip()
+        or default_arduino_mode_command_for_plotter(1, "marker"),
+        "erase": os.environ.get("ARDUINO_PLOTTER_1_ERASE_COMMAND", default_arduino_mode_command_for_plotter(1, "erase")).strip()
+        or default_arduino_mode_command_for_plotter(1, "erase"),
     },
     2: {
-        "marker": os.environ.get("ARDUINO_PLOTTER_2_MARKER_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[2]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[2],
-        "erase": os.environ.get("ARDUINO_PLOTTER_2_ERASE_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[2]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[2],
+        "marker": os.environ.get("ARDUINO_PLOTTER_2_MARKER_COMMAND", default_arduino_mode_command_for_plotter(2, "marker")).strip()
+        or default_arduino_mode_command_for_plotter(2, "marker"),
+        "erase": os.environ.get("ARDUINO_PLOTTER_2_ERASE_COMMAND", default_arduino_mode_command_for_plotter(2, "erase")).strip()
+        or default_arduino_mode_command_for_plotter(2, "erase"),
     },
     3: {
-        "marker": os.environ.get("ARDUINO_PLOTTER_3_MARKER_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[3]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[3],
-        "erase": os.environ.get("ARDUINO_PLOTTER_3_ERASE_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[3]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[3],
+        "marker": os.environ.get("ARDUINO_PLOTTER_3_MARKER_COMMAND", default_arduino_mode_command_for_plotter(3, "marker")).strip()
+        or default_arduino_mode_command_for_plotter(3, "marker"),
+        "erase": os.environ.get("ARDUINO_PLOTTER_3_ERASE_COMMAND", default_arduino_mode_command_for_plotter(3, "erase")).strip()
+        or default_arduino_mode_command_for_plotter(3, "erase"),
     },
     4: {
-        "marker": os.environ.get("ARDUINO_PLOTTER_4_MARKER_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[4]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[4],
-        "erase": os.environ.get("ARDUINO_PLOTTER_4_ERASE_COMMAND", ARDUINO_PLOTTER_TOGGLE_COMMANDS[4]).strip()
-        or ARDUINO_PLOTTER_TOGGLE_COMMANDS[4],
+        "marker": os.environ.get("ARDUINO_PLOTTER_4_MARKER_COMMAND", default_arduino_mode_command_for_plotter(4, "marker")).strip()
+        or default_arduino_mode_command_for_plotter(4, "marker"),
+        "erase": os.environ.get("ARDUINO_PLOTTER_4_ERASE_COMMAND", default_arduino_mode_command_for_plotter(4, "erase")).strip()
+        or default_arduino_mode_command_for_plotter(4, "erase"),
     },
 }
 PLOTTER_PORTS_BY_INDEX = {
@@ -150,15 +245,31 @@ ACTIVE_GUIDED_AREA_MODE = True
 ACTIVE_GUIDED_AREA_STATE_BY_PORT: dict[str, dict[str, int]] = {}
 ACTIVE_GUIDED_AREA_SLOT_PREVIEWS_BY_PORT: dict[str, list[dict[str, Any] | None]] = {}
 ACTIVE_GUIDED_AREA_SLOT_GUIDED_KOLAMS_BY_PORT: dict[str, list[dict[str, Any] | None]] = {}
+CONTROLLER_SELECTED_PLOTTER_INDEX: int | None = None
+CONTROLLER_LAST_EVENT: dict[str, Any] | None = None
 LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN = os.environ.get("ACTIVE_GUIDED_AREA_SIZE_IN")
+DEFAULT_ACTIVE_GUIDED_AREA_WIDTH_IN = 8.75
+DEFAULT_ACTIVE_GUIDED_AREA_HEIGHT_IN = 2.75
+DEFAULT_ACTIVE_GUIDED_AREA_COLUMNS = 3
+DEFAULT_ACTIVE_GUIDED_AREA_ROWS = 1
 ACTIVE_GUIDED_AREA_WIDTH_IN = float(
-    os.environ.get("ACTIVE_GUIDED_AREA_WIDTH_IN", LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or "6.0")
+    os.environ.get(
+        "ACTIVE_GUIDED_AREA_WIDTH_IN",
+        LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or str(DEFAULT_ACTIVE_GUIDED_AREA_WIDTH_IN),
+    )
 )
 ACTIVE_GUIDED_AREA_HEIGHT_IN = float(
-    os.environ.get("ACTIVE_GUIDED_AREA_HEIGHT_IN", LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or "4.0")
+    os.environ.get(
+        "ACTIVE_GUIDED_AREA_HEIGHT_IN",
+        LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or str(DEFAULT_ACTIVE_GUIDED_AREA_HEIGHT_IN),
+    )
 )
-ACTIVE_GUIDED_AREA_COLUMNS = int(os.environ.get("ACTIVE_GUIDED_AREA_COLUMNS", "3"))
-ACTIVE_GUIDED_AREA_ROWS = int(os.environ.get("ACTIVE_GUIDED_AREA_ROWS", "2"))
+ACTIVE_GUIDED_AREA_COLUMNS = int(
+    os.environ.get("ACTIVE_GUIDED_AREA_COLUMNS", str(DEFAULT_ACTIVE_GUIDED_AREA_COLUMNS))
+)
+ACTIVE_GUIDED_AREA_ROWS = int(
+    os.environ.get("ACTIVE_GUIDED_AREA_ROWS", str(DEFAULT_ACTIVE_GUIDED_AREA_ROWS))
+)
 ACTIVE_GUIDED_AREA_MARGIN_IN = float(os.environ.get("ACTIVE_GUIDED_AREA_MARGIN_IN", "0.0"))
 ACTIVE_GUIDED_AREA_GAP_IN = float(os.environ.get("ACTIVE_GUIDED_AREA_GAP_IN", "0.25"))
 ACTIVE_GUIDED_AREA_ORIGIN_X_IN = float(
@@ -172,17 +283,17 @@ PASSIVE_PACKED_AREA_SIZE_MAX = int(os.environ.get("PASSIVE_PACKED_AREA_SIZE_MAX"
 ACTIVE_GUIDED_ERASE_SWEEP_STEP_IN = float(os.environ.get("ACTIVE_GUIDED_ERASE_SWEEP_STEP_IN", "0.12"))
 LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN = os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN")
 ACTIVE_GUIDED_ERASE_X_OVERSCAN_LEFT_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_LEFT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_LEFT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "0.5")
 )
 ACTIVE_GUIDED_ERASE_X_OVERSCAN_RIGHT_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_RIGHT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_RIGHT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "0.5")
 )
 LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN = os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN")
 ACTIVE_GUIDED_ERASE_Y_OVERSCAN_BOTTOM_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_BOTTOM_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_BOTTOM_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "0.5")
 )
 ACTIVE_GUIDED_ERASE_Y_OVERSCAN_TOP_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_TOP_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_TOP_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "0.5")
 )
 ACTIVE_GUIDED_ERASE_OFFSET_X_IN = float(os.environ.get("ACTIVE_GUIDED_ERASE_OFFSET_X_IN", "0.0"))
 ACTIVE_GUIDED_ERASE_OFFSET_Y_IN = float(os.environ.get("ACTIVE_GUIDED_ERASE_OFFSET_Y_IN", "0.0"))
@@ -216,6 +327,19 @@ def resolve_port(port_value: str | None) -> str | None:
         return port_value
     resolved = ebb_serial.find_named_ebb(port_value)
     return str(resolved) if resolved else str(port_value)
+
+
+def resolve_static_file(root: Path, relative_path: str, default_name: str = "index.html") -> Path | None:
+    trimmed_path = unquote(relative_path).lstrip("/")
+    normalized_path = trimmed_path or default_name
+    candidate = (root / normalized_path).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
 
 
 def serial_port_aliases(port_value: str | None) -> set[str]:
@@ -552,6 +676,7 @@ def snapshot_dashboard_state() -> dict[str, Any]:
     active_guided_area_mode = snapshot_active_guided_area_mode()
     passive_mode = snapshot_passive_mode()
     arduino_state = snapshot_arduino_state()
+    controller_state = snapshot_controller_state()
 
     with STATE_LOCK:
         passive_seed = PASSIVE_SESSION_SEED
@@ -668,6 +793,7 @@ def snapshot_dashboard_state() -> dict[str, Any]:
             "pattern_counts_by_port": passive_pattern_counts,
         },
         "arduino": arduino_state,
+        "controller": controller_state,
     }
 
 
@@ -746,6 +872,12 @@ def control_command_message(command_name: str, result_count: int) -> str:
     if command_name == "erase_sweep_demo":
         return (
             "Drew 1 passive-mode kolam and erased it with a bounded vertical sweep "
+            f"on {result_count} plotter(s)."
+        )
+    if command_name == "horizontal_sweep_area_test":
+        return (
+            "Drew a rectangle in the configured guided kolam area, then flipped into erase mode "
+            "and retraced it "
             f"on {result_count} plotter(s)."
         )
     if command_name == "erase_area":
@@ -1473,6 +1605,33 @@ def erase_sweep_bounds(
         ad.penup()
 
 
+def draw_rectangle_bounds(
+    ad: axidraw.AxiDraw,
+    context_label: str,
+    left_in: float,
+    right_in: float,
+    bottom_in: float,
+    top_in: float,
+) -> None:
+    left = max(0.0, left_in)
+    right = max(left, right_in)
+    bottom = max(0.0, bottom_in)
+    top = max(bottom, top_in)
+
+    print(
+        f"{context_label} Drawing rectangle in area from ({left:.2f}, {bottom:.2f}) "
+        f"to ({right:.2f}, {top:.2f})."
+    )
+    ad.penup()
+    ad.moveto(left, bottom)
+    ad.pendown()
+    ad.lineto(right, bottom)
+    ad.lineto(right, top)
+    ad.lineto(left, top)
+    ad.lineto(left, bottom)
+    ad.penup()
+
+
 def erase_trace_active_guided_area(
     ad: axidraw.AxiDraw,
     port: str,
@@ -1754,6 +1913,101 @@ def sweep_active_guided_area_on_plotter(port: str) -> str:
             pass
 
 
+def horizontal_sweep_active_guided_area_on_plotter(port: str, plotter_index: int) -> str:
+    ad = build_interactive_plotter(port)
+    context_label = f"[plotter {port}]"
+    try:
+        ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+        left, right, bottom, top = active_guided_area_configured_bounds()
+        draw_rectangle_bounds(
+            ad,
+            context_label,
+            left,
+            right,
+            bottom,
+            top,
+        )
+        try:
+            set_arduino_servo_mode(
+                context_label,
+                plotter_index,
+                "erase",
+                "Rotating Arduino servo into erase mode for rectangle erase",
+            )
+            print(f"{context_label} Waiting {ARDUINO_REDRAW_PAUSE_SECONDS:.1f}s for eraser to settle...")
+            time.sleep(max(0.0, ARDUINO_REDRAW_PAUSE_SECONDS))
+            draw_rectangle_bounds(
+                ad,
+                context_label,
+                left,
+                right,
+                bottom,
+                top,
+            )
+        finally:
+            set_arduino_servo_mode(
+                context_label,
+                plotter_index,
+                "marker",
+                "Returning Arduino servo to marker mode after rectangle erase test",
+            )
+        port_state = get_active_guided_area_port_state(port)
+        set_active_guided_area_port_state(port, 0, port_state["cycles_completed"])
+        clear_active_guided_area_slot_previews(port)
+        print(
+            f"{context_label} Rectangle erase test finished. "
+            "Packed area slot state reset for this plotter."
+        )
+        return_interactive_plotter_to_origin(ad)
+        return (
+            "drew a rectangle in the configured guided kolam area, flipped to erase mode, "
+            "retraced it, and reset packed-area slot state"
+        )
+    finally:
+        try:
+            ad.disconnect()
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+
+def horizontal_sweep_active_guided_area_on_plotters(
+    plotter_indices_by_port: dict[str, int],
+) -> dict[str, str]:
+    ordered_ports = sorted(plotter_indices_by_port)
+    start_event = threading.Event()
+    errors: list[str] = []
+    actions_by_port: dict[str, str] = {}
+    results_lock = threading.Lock()
+
+    def worker(port: str) -> None:
+        plotter_index = plotter_indices_by_port[port]
+        try:
+            start_event.wait()
+            action = horizontal_sweep_active_guided_area_on_plotter(port, plotter_index)
+            with results_lock:
+                actions_by_port[port] = action
+        except Exception as exc:  # pylint: disable=broad-except
+            with results_lock:
+                errors.append(f"{port}: {exc}")
+
+    threads = [
+        threading.Thread(target=worker, args=(port,), daemon=True)
+        for port in ordered_ports
+    ]
+    for thread in threads:
+        thread.start()
+
+    start_event.set()
+
+    for thread in threads:
+        thread.join()
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+    return actions_by_port
+
+
 def sweep_active_guided_area_on_plotters(ports: list[str]) -> dict[str, str]:
     ordered_ports = sorted(ports)
     start_event = threading.Event()
@@ -1982,6 +2236,122 @@ def arduino_plotter_index(plotter_index: int | None) -> int:
     return selected_index
 
 
+def controller_event_payload(
+    action: str,
+    plotter_index: int | None,
+    source: str,
+    message: str,
+) -> dict[str, Any]:
+    plotter_label_value = (
+        plotter_label(plotter_index - 1)
+        if isinstance(plotter_index, int) and plotter_index >= 1
+        else None
+    )
+    return {
+        "action": action,
+        "plotter_index": plotter_index,
+        "plotter_label": plotter_label_value,
+        "source": source,
+        "message": message,
+        "timestamp": time.time(),
+    }
+
+
+def snapshot_controller_state() -> dict[str, Any]:
+    with STATE_LOCK:
+        selected_plotter_index = CONTROLLER_SELECTED_PLOTTER_INDEX
+        last_event = dict(CONTROLLER_LAST_EVENT) if isinstance(CONTROLLER_LAST_EVENT, dict) else None
+
+    selected_plotter_label = (
+        plotter_label(selected_plotter_index - 1)
+        if isinstance(selected_plotter_index, int) and selected_plotter_index >= 1
+        else None
+    )
+    return {
+        "selected_plotter_index": selected_plotter_index,
+        "selected_plotter_label": selected_plotter_label,
+        "last_event": last_event,
+    }
+
+
+def set_controller_selected_plotter(plotter_index: int, source: str, message: str) -> None:
+    global CONTROLLER_SELECTED_PLOTTER_INDEX, CONTROLLER_LAST_EVENT  # pylint: disable=global-statement
+
+    with STATE_LOCK:
+        CONTROLLER_SELECTED_PLOTTER_INDEX = plotter_index
+        CONTROLLER_LAST_EVENT = controller_event_payload(
+            "select_plotter",
+            plotter_index,
+            source,
+            message,
+        )
+
+
+def record_controller_command(action: str, plotter_index: int | None, source: str, message: str) -> None:
+    global CONTROLLER_SELECTED_PLOTTER_INDEX, CONTROLLER_LAST_EVENT  # pylint: disable=global-statement
+
+    with STATE_LOCK:
+        if isinstance(plotter_index, int):
+            CONTROLLER_SELECTED_PLOTTER_INDEX = plotter_index
+        CONTROLLER_LAST_EVENT = controller_event_payload(action, plotter_index, source, message)
+
+
+def resolve_controller_plotter_index(explicit_plotter_index: int | None = None) -> int | None:
+    if explicit_plotter_index is not None:
+        return arduino_plotter_index(explicit_plotter_index)
+
+    with STATE_LOCK:
+        selected_plotter_index = CONTROLLER_SELECTED_PLOTTER_INDEX
+
+    if selected_plotter_index is None:
+        return None
+    return arduino_plotter_index(selected_plotter_index)
+
+
+def run_controller_command(
+    action: str,
+    *,
+    plotter_index: int | None = None,
+    source: str = "controller",
+) -> dict[str, Any]:
+    if action == "select_plotter":
+        if plotter_index is None:
+            return {"status": "error", "message": "Field 'plotter_index' is required for controller plotter selection."}
+        normalized_plotter_index = arduino_plotter_index(plotter_index)
+        message = f"Controller selected Plotter {plotter_label(normalized_plotter_index - 1)}."
+        set_controller_selected_plotter(normalized_plotter_index, source, message)
+        result = {
+            "status": "done",
+            "command": action,
+            "message": message,
+            "plotter_index": normalized_plotter_index,
+        }
+        result["controller"] = snapshot_controller_state()
+        return result
+
+    normalized_plotter_index = resolve_controller_plotter_index(plotter_index)
+    if normalized_plotter_index is None:
+        return {
+            "status": "error",
+            "message": "No controller plotter is selected. Choose a plotter first.",
+            "controller": snapshot_controller_state(),
+        }
+
+    print(
+        f"[controller] source={source} action={action} plotter={plotter_label(normalized_plotter_index - 1)} "
+        f"({normalized_plotter_index})"
+    )
+    if action == "servo_toggle":
+        result = toggle_arduino_servos(plotter_indices=[normalized_plotter_index])
+    else:
+        result = run_bridge_control_command(action, plotter_indices=[normalized_plotter_index])
+    if result.get("status") == "done":
+        message = str(result.get("message", ""))
+        record_controller_command(action, normalized_plotter_index, source, message)
+    result["controller"] = snapshot_controller_state()
+    return result
+
+
 def reset_arduino_servo_modes_locked() -> None:
     global ARDUINO_SERVO_MODE_BY_PLOTTER  # pylint: disable=global-statement
 
@@ -2088,7 +2458,10 @@ def sync_arduino_state_from_command_locked(command_text: str) -> None:
             return
 
     if len(normalized) == 2 and normalized[0] in "ABCD" and normalized[1] in "MET":
-        plotter_index = "ABCD".index(normalized[0]) + 1
+        servo_channel = SERVO_CHANNEL_NAMES.index(normalized[0]) + 1
+        plotter_index = plotter_index_for_arduino_servo_channel(servo_channel)
+        if plotter_index is None:
+            return
         action = normalized[1]
         if action == "M":
             set_arduino_plotter_mode_locked(plotter_index, "marker")
@@ -2111,7 +2484,14 @@ def sync_arduino_state_from_command_locked(command_text: str) -> None:
         return
 
     if normalized in {"ABM", "ABE", "ABT"}:
-        target_indices = (1, 2)
+        target_indices = [
+            plotter_index
+            for plotter_index in (
+                plotter_index_for_arduino_servo_channel(1),
+                plotter_index_for_arduino_servo_channel(2),
+            )
+            if plotter_index is not None
+        ]
         if normalized.endswith("M"):
             for plotter_index in target_indices:
                 set_arduino_plotter_mode_locked(plotter_index, "marker")
@@ -2142,9 +2522,9 @@ def sync_arduino_state_from_messages_locked(messages: list[str]) -> bool:
         toggle_plotter_index: int | None = None
         for token in normalized_message.split():
             if len(token) == 2 and token[0] == "T" and token[1].isdigit():
-                candidate_index = int(token[1])
-                if 1 <= candidate_index <= MAX_SUPPORTED_PLOTTERS:
-                    toggle_plotter_index = candidate_index
+                candidate_channel = int(token[1])
+                if 1 <= candidate_channel <= MAX_SUPPORTED_PLOTTERS:
+                    toggle_plotter_index = plotter_index_for_arduino_servo_channel(candidate_channel)
                 continue
             if token.startswith("ANGLE="):
                 try:
@@ -2159,9 +2539,9 @@ def sync_arduino_state_from_messages_locked(messages: list[str]) -> bool:
                     updated = True
                 continue
             if len(token) >= 4 and token[0] == "P" and token[1].isdigit() and token[2] == "=":
-                plotter_index = int(token[1])
+                plotter_index = plotter_index_for_arduino_servo_channel(int(token[1]))
                 mode = token[3:]
-                if 1 <= plotter_index <= MAX_SUPPORTED_PLOTTERS and mode in {"MARKER", "ERASE"}:
+                if plotter_index is not None and mode in {"MARKER", "ERASE"}:
                     set_arduino_plotter_mode_locked(plotter_index, mode.lower())
                     updated = True
                 continue
@@ -2171,7 +2551,10 @@ def sync_arduino_state_from_messages_locked(messages: list[str]) -> bool:
             mode = token[2:]
             if servo_name not in "ABCD" or mode not in {"MARKER", "ERASE"}:
                 continue
-            set_arduino_plotter_mode_locked("ABCD".index(servo_name) + 1, mode.lower())
+            plotter_index = plotter_index_for_arduino_servo_channel(SERVO_CHANNEL_NAMES.index(servo_name) + 1)
+            if plotter_index is None:
+                continue
+            set_arduino_plotter_mode_locked(plotter_index, mode.lower())
             updated = True
     return updated
 
@@ -2545,6 +2928,7 @@ def snapshot_arduino_state() -> dict[str, Any]:
         "servo_initial_mode": ARDUINO_SERVO_INITIAL_MODE,
         "servo_mode": servo_modes.get(1, ARDUINO_SERVO_UNKNOWN_MODE),
         "servo_modes_by_plotter": servo_modes,
+        "servo_channel_by_plotter": ARDUINO_SERVO_CHANNEL_BY_PLOTTER,
         "servo_commands_by_plotter": ARDUINO_PLOTTER_SERVO_COMMANDS,
         "import_error": str(SERIAL_IMPORT_ERROR) if SERIAL_IMPORT_ERROR else None,
         "candidate_ports": list_candidate_arduino_ports(),
@@ -2804,6 +3188,18 @@ def send_arduino_command(
     )
 
 
+def arduino_unknown_command_result(result: dict[str, Any]) -> bool:
+    if result.get("status") != "error":
+        return False
+    message = str(result.get("message", "")).upper()
+    if "ERR UNKNOWN" in message:
+        return True
+    responses = result.get("responses", [])
+    if isinstance(responses, list):
+        return any("ERR UNKNOWN" in str(response).upper() for response in responses)
+    return False
+
+
 def ensure_arduino_servo_mode(
     target_mode: str,
     plotter_index: int | None = None,
@@ -2841,6 +3237,60 @@ def ensure_arduino_servo_mode(
         port=port,
         baud_rate=baud_rate,
     )
+    if result["status"] != "done" and not toggle_only_command and arduino_unknown_command_result(result):
+        if current_mode == normalized_mode:
+            return arduino_result(
+                "done",
+                (
+                    f"Arduino servo for plotter {selected_plotter_index} assumed in {normalized_mode} mode. "
+                    f"Explicit command '{command_text}' is unsupported by the current Arduino firmware."
+                ),
+                target_mode=normalized_mode,
+                actual_mode=current_mode,
+                plotter_index=selected_plotter_index,
+                command=command_text,
+                fallback_command=None,
+            )
+
+        fallback_command = arduino_plotter_toggle_command(selected_plotter_index)
+        fallback_result = send_arduino_command(
+            fallback_command,
+            port=port,
+            baud_rate=baud_rate,
+        )
+        if fallback_result["status"] != "done":
+            return fallback_result
+
+        with ARDUINO_LOCK:
+            current_mode = ARDUINO_SERVO_MODE_BY_PLOTTER.get(selected_plotter_index, ARDUINO_SERVO_UNKNOWN_MODE)
+
+        if current_mode != normalized_mode:
+            return arduino_result(
+                "error",
+                (
+                    f"Arduino servo mode sync failed for plotter {selected_plotter_index} after fallback. "
+                    f"Expected {normalized_mode}, got {current_mode}."
+                ),
+                target_mode=normalized_mode,
+                actual_mode=current_mode,
+                plotter_index=selected_plotter_index,
+                command=command_text,
+                fallback_command=fallback_command,
+            )
+
+        return arduino_result(
+            "done",
+            (
+                f"Arduino servo for plotter {selected_plotter_index} set to {normalized_mode} mode "
+                f"using fallback toggle '{fallback_command}' because '{command_text}' is unsupported."
+            ),
+            target_mode=normalized_mode,
+            actual_mode=current_mode,
+            plotter_index=selected_plotter_index,
+            command=command_text,
+            fallback_command=fallback_command,
+        )
+
     if result["status"] != "done":
         return result
 
@@ -2985,11 +3435,16 @@ def choose_target_ports(
     return [port for port in selected if port]
 
 
-def start_passive_mode(count: int | None = None, requested_ports: list[str] | None = None) -> dict[str, Any]:
+def start_passive_mode(
+    count: int | None = None,
+    requested_ports: list[str] | None = None,
+    plotter_indices: list[int] | None = None,
+) -> dict[str, Any]:
     global PASSIVE_PROCESS, PASSIVE_RESERVED_PORTS, PASSIVE_SESSION_SEED  # pylint: disable=global-statement
 
     refresh_passive_mode_state()
     requested_ports = requested_ports or []
+    requested_plotter_indices = plotter_indices or []
     passive_state = snapshot_passive_mode()
     if passive_state["running"]:
         return {
@@ -3036,13 +3491,21 @@ def start_passive_mode(count: int | None = None, requested_ports: list[str] | No
             "ports": connectable_ports,
         }
 
-    target_count = len(connectable_ports) if count is None else count
     try:
-        selected_ports = choose_target_ports(target_count, requested_ports, connectable_ports)
+        if requested_plotter_indices:
+            selected_ports = select_plotter_ports_by_index(
+                detected_ports,
+                connectable_ports,
+                requested_plotter_indices,
+            )
+        else:
+            target_count = len(connectable_ports) if count is None else count
+            selected_ports = choose_target_ports(target_count, requested_ports, connectable_ports)
     except RuntimeError as exc:
         return {"status": "error", "message": str(exc)}
 
     selected_indices = plotter_indices_by_port(selected_ports)
+
     missing_mapping_ports = [port for port in selected_ports if port not in selected_indices]
     if missing_mapping_ports:
         return {
@@ -3124,6 +3587,8 @@ def start_passive_mode(count: int | None = None, requested_ports: list[str] | No
     if selected_ports:
         command.append("--ports")
         command.extend(selected_ports)
+        command.append("--plotter-indices")
+        command.extend(str(selected_indices[port]) for port in selected_ports)
 
     try:
         process = subprocess.Popen(command, cwd=str(REPO_ROOT))
@@ -3357,6 +3822,32 @@ def run_control_command(command_name: str, ports: list[str]) -> list[dict[str, s
             )
         return results
 
+    if command_name == "horizontal_sweep_area_test":
+        port_plotter_indices = {
+            port: int(plotter_indices[port])
+            for port in ordered_ports
+            if isinstance(plotter_indices.get(port), int)
+        }
+        if len(port_plotter_indices) != len(ordered_ports):
+            unresolved_ports = [port for port in ordered_ports if port not in port_plotter_indices]
+            raise RuntimeError(
+                "Could not determine plotter indices for horizontal sweep area test on: "
+                + ", ".join(unresolved_ports)
+            )
+        actions_by_port = horizontal_sweep_active_guided_area_on_plotters(port_plotter_indices)
+        for port in ordered_ports:
+            action = actions_by_port.get(port)
+            if action is None:
+                raise RuntimeError(f"Could not collect horizontal sweep area test result for {port}.")
+            results.append(
+                {
+                    "port": port,
+                    "plotter_label": labels[port],
+                    "action": action,
+                }
+            )
+        return results
+
     plotters: list[tuple[str, axidraw.AxiDraw]] = []
     try:
         for port in ordered_ports:
@@ -3486,6 +3977,7 @@ def run_bridge_control_command(
 
 def print_terminal_help() -> None:
     print("Terminal controls:")
+    print("  b  -> on plotter 4, draw a rectangle in the guided kolam area, then flip and erase it")
     print("  d  -> pen down on all available plotters")
     print("  u  -> pen up on all available plotters")
     print("  e  -> draw 1 passive-mode kolam, then erase it by retracing on all available plotters")
@@ -3498,6 +3990,8 @@ def print_terminal_help() -> None:
     print("  r  -> toggle the configured plotter Arduino servos")
     print("  r1/r2/r3/r4 -> toggle the Arduino servo for plotter 1 / 2 / 3 / 4")
     print("  p  -> start passive mode on all available plotters")
+    print("  p1/p2/p3/p4 -> start passive mode on 1 / 2 / 3 / 4 plotters")
+    print("  pp1/pp2/pp3/pp4 -> start passive mode on logical plotter 1 / 2 / 3 / 4 only")
     print("  s  -> stop passive mode, then return home + disable XY motors")
     print("  m  -> reset packed draw/erase state (mode is always on)")
     print("  h  -> show this help")
@@ -3524,8 +4018,8 @@ def terminal_control_loop() -> None:
         "x": "disable_motors",
     }
     unknown_command_message = (
-        "Unknown command. Use d, u, e, e1, e2, x, d1/d2/d3/d4, u1/u2/u3/u4, "
-        "r, r1/r2/r3/r4, a, p, s, m, or h."
+        "Unknown command. Use b, d, u, e, e1, e2, x, d1/d2/d3/d4, u1/u2/u3/u4, "
+        "r, r1/r2/r3/r4, a, p, p1/p2/p3/p4, pp1/pp2/pp3/pp4, s, m, or h."
     )
     print_terminal_help()
 
@@ -3546,6 +4040,26 @@ def terminal_control_loop() -> None:
 
         if raw == "p":
             print(format_command_results(start_passive_mode()))
+            continue
+
+        if len(raw) == 3 and raw[:2] == "pp" and raw[2].isdigit():
+            target_plotter_index = int(raw[2])
+            if target_plotter_index < 1 or target_plotter_index > MAX_SUPPORTED_PLOTTERS:
+                print(f"Passive mode plotter index must be between 1 and {MAX_SUPPORTED_PLOTTERS}.")
+                continue
+            print(
+                format_command_results(
+                    start_passive_mode(plotter_indices=[target_plotter_index])
+                )
+            )
+            continue
+
+        if len(raw) == 2 and raw[0] == "p" and raw[1].isdigit():
+            target_count = int(raw[1])
+            if target_count < 1 or target_count > MAX_SUPPORTED_PLOTTERS:
+                print(f"Passive mode plotter count must be between 1 and {MAX_SUPPORTED_PLOTTERS}.")
+                continue
+            print(format_command_results(start_passive_mode(count=target_count)))
             continue
 
         if raw == "s":
@@ -3571,6 +4085,17 @@ def terminal_control_loop() -> None:
 
         if raw == "m":
             print(format_command_results(toggle_active_guided_area_mode()))
+            continue
+
+        if raw == "b":
+            print(
+                format_command_results(
+                    run_bridge_control_command(
+                        "horizontal_sweep_area_test",
+                        plotter_indices=[4],
+                    )
+                )
+            )
             continue
 
         if raw == "e1":
@@ -3725,6 +4250,29 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _send_file(self, file_path: Path) -> None:
+        body = file_path.read_bytes()
+        content_type, content_encoding = mimetypes.guess_type(str(file_path))
+        self.send_response(200)
+        self.send_header("Content-Type", content_type or "application/octet-stream")
+        if content_encoding:
+            self.send_header("Content-Encoding", content_encoding)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_redirect(self, location: str, status_code: int = 302) -> None:
+        self.send_response(status_code)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def _read_json_body(self, allow_empty: bool = False) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -3759,6 +4307,19 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         refresh_passive_mode_state()
+
+        if path == "/client":
+            self._send_redirect("/client/")
+            return
+
+        if path == "/client/" or path.startswith("/client/"):
+            relative_path = path[len("/client/") :] if path.startswith("/client/") else ""
+            static_file = resolve_static_file(CLIENT_APP_ROOT_RESOLVED, relative_path)
+            if static_file is None:
+                self._send_json(404, {"status": "error", "message": "Client asset not found."})
+                return
+            self._send_file(static_file)
+            return
 
         if path in {"/", "/dashboard"}:
             if not DASHBOARD_HTML.exists():
@@ -3812,12 +4373,17 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "ok", "arduino": snapshot_arduino_state()})
             return
 
+        if path == "/controller/status":
+            self._send_json(200, {"status": "ok", "controller": snapshot_controller_state()})
+            return
+
         self._send_json(404, {"status": "error", "message": "Not found."})
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         refresh_passive_mode_state()
         control_routes = {
+            "/horizontal-sweep-area-test": "horizontal_sweep_area_test",
             "/pen-down": "pen_down",
             "/pen-up": "pen_up",
             "/erase-area": "erase_area",
@@ -3832,17 +4398,27 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
             "/arduino/servo-toggle",
             "/arduino/servo-mode",
         }
+        controller_routes = {
+            "/controller/select-plotter",
+            "/controller/pen-up",
+            "/controller/pen-down",
+            "/controller/servo-toggle",
+        }
         if (
             path != "/plot-svg"
             and path not in control_routes
             and path not in passive_routes
             and path not in arduino_routes
+            and path not in controller_routes
             and path not in dashboard_routes
         ):
             self._send_json(404, {"status": "error", "message": "Not found."})
             return
 
-        if path == "/plot-svg" or path in control_routes or path in passive_routes:
+        if path == "/plot-svg" or path in control_routes or path in passive_routes or path in {
+            "/controller/pen-up",
+            "/controller/pen-down",
+        }:
             if IMPORT_ERROR is not None:
                 self._send_json(
                     500,
@@ -3854,7 +4430,12 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                 return
 
         body = self._read_json_body(
-            allow_empty=path in control_routes or path in passive_routes or path in arduino_routes
+            allow_empty=(
+                path in control_routes
+                or path in passive_routes
+                or path in arduino_routes
+                or path in controller_routes
+            )
         )
         if body is None:
             return
@@ -3974,6 +4555,47 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                 port=port_value,
                 baud_rate=baud_rate_value,
             )
+            status_code = 500 if result["status"] == "error" else 200
+            self._send_json(status_code, result)
+            return
+
+        if path in controller_routes:
+            plotter_index_value = body.get("plotter_index")
+            if plotter_index_value is not None and not isinstance(plotter_index_value, int):
+                self._send_json(400, {"status": "error", "message": "Field 'plotter_index' must be an integer."})
+                return
+
+            source_value = body.get("source", "controller")
+            if not isinstance(source_value, str):
+                self._send_json(400, {"status": "error", "message": "Field 'source' must be a string."})
+                return
+            normalized_source = source_value.strip() or "controller"
+
+            if path == "/controller/select-plotter":
+                result = run_controller_command(
+                    "select_plotter",
+                    plotter_index=plotter_index_value,
+                    source=normalized_source,
+                )
+            elif path == "/controller/pen-up":
+                result = run_controller_command(
+                    "pen_up",
+                    plotter_index=plotter_index_value,
+                    source=normalized_source,
+                )
+            elif path == "/controller/servo-toggle":
+                result = run_controller_command(
+                    "servo_toggle",
+                    plotter_index=plotter_index_value,
+                    source=normalized_source,
+                )
+            else:
+                result = run_controller_command(
+                    "pen_down",
+                    plotter_index=plotter_index_value,
+                    source=normalized_source,
+                )
+
             status_code = 500 if result["status"] == "error" else 200
             self._send_json(status_code, result)
             return

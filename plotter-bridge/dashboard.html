@@ -648,7 +648,7 @@
         <section class="panel area-panel">
           <div class="area-panel-head">
             <div>
-              <h2>3 x 2 Guided Area Preview</h2>
+              <h2>Guided Area Preview</h2>
               <div class="meta-line" id="active-area-meta">Waiting for active area state...</div>
             </div>
           </div>
@@ -692,7 +692,7 @@
   </template>
 
   <script>
-    const DEFAULT_BRIDGE_ORIGIN = "http://127.0.0.1:8765";
+    const DEFAULT_BRIDGE_BASE_URL = "http://localhost:8765";
 
     const state = {
       snapshot: null,
@@ -702,32 +702,43 @@
 
     const logFeed = document.getElementById("log-feed");
     const bridgeMeta = document.getElementById("bridge-meta");
-    const bridgeOrigin = resolveBridgeOrigin();
+    const bridgeBaseUrl = resolveBridgeBaseUrl();
 
-    function resolveBridgeOrigin() {
+    function resolveBridgeBaseUrl() {
       const params = new URLSearchParams(window.location.search);
+      const requestedBaseUrl = params.get("bridgeBase");
+      if (requestedBaseUrl) {
+        try {
+          return normalizeBridgeBaseUrl(requestedBaseUrl);
+        } catch (error) {
+          console.warn("Ignoring invalid bridgeBase query parameter.", error);
+        }
+      }
+
       const requestedOrigin = params.get("bridge");
       if (requestedOrigin) {
         try {
-          return new URL(requestedOrigin).origin;
+          return normalizeBridgeBaseUrl(new URL(requestedOrigin).origin);
         } catch (error) {
           console.warn("Ignoring invalid bridge origin query parameter.", error);
         }
       }
 
       if (window.location.protocol.startsWith("http")) {
-        const host = window.location.hostname;
-        const port = window.location.port;
-        if ((host === "127.0.0.1" || host === "localhost") && port === "8765") {
-          return window.location.origin;
-        }
+        return normalizeBridgeBaseUrl(`${window.location.origin}/`);
       }
 
-      return DEFAULT_BRIDGE_ORIGIN;
+      return DEFAULT_BRIDGE_BASE_URL;
+    }
+
+    function normalizeBridgeBaseUrl(value) {
+      const url = new URL(value, window.location.href);
+      return url.href.replace(/\/+$/, "");
     }
 
     function bridgeUrl(path) {
-      return new URL(path, `${bridgeOrigin}/`).toString();
+      const normalizedPath = String(path || "").replace(/^\/+/, "");
+      return new URL(normalizedPath, `${bridgeBaseUrl}/`).toString();
     }
 
     async function readJsonResponse(response, path) {
@@ -990,7 +1001,7 @@
         meta.textContent = "Active guided area mode is disabled.";
         const empty = document.createElement("div");
         empty.className = "area-preview-empty";
-        empty.textContent = "The 3 x 2 prototype area preview appears when active guided area mode is enabled.";
+        empty.textContent = "The prototype area preview appears when active guided area mode is enabled.";
         previewGrid.append(empty);
         return;
       }
@@ -1096,7 +1107,7 @@
       const arduino = snapshot.arduino || {};
       const slotCount = active.slot_count ?? 0;
       bridgeMeta.textContent =
-        `Dashboard using bridge ${bridgeOrigin}\n` +
+        `Dashboard using bridge ${bridgeBaseUrl}\n` +
         `Host ${snapshot.host}:${snapshot.port}\n` +
         `Packed area ${active.area_width_in}" × ${active.area_height_in}" at (${active.origin_x_in}", ${active.origin_y_in}") with ${active.columns} × ${active.rows} layout\n` +
         `Erase trace over ${slotCount} packed slot${slotCount === 1 ? "" : "s"} | Passive ${passive.running ? `running on ${passive.ports.join(", ")}` : "stopped"}\n` +
@@ -1180,7 +1191,7 @@
     }
 
     bindHeroActions();
-    addLog(`Dashboard connected to ${bridgeOrigin}`);
+    addLog(`Dashboard connected to ${bridgeBaseUrl}`);
     refreshState();
     state.pollHandle = window.setInterval(refreshState, 2000);
   </script>

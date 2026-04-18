@@ -17,13 +17,26 @@ SOURCE_SCRIPT = (
 )
 
 
+def preferred_repo_python(repo_root: Path) -> Path | None:
+    current_python = Path(sys.executable)
+    for candidate in (
+        repo_root / ".venv" / "bin" / "python",
+        repo_root / ".venv" / "bin" / "python3",
+    ):
+        if candidate.exists() and candidate != current_python:
+            return candidate
+    return None
+
+
 def main() -> int:
     if not SOURCE_SCRIPT.exists():
         print(f"Passive kolam source script not found: {SOURCE_SCRIPT}")
         return 1
 
+    repo_python = preferred_repo_python(REPO_ROOT)
+    executable = str(repo_python or Path(sys.executable))
     os.chdir(REPO_ROOT)
-    os.execv(sys.executable, [sys.executable, str(SOURCE_SCRIPT), *sys.argv[1:]])
+    os.execv(executable, [executable, str(SOURCE_SCRIPT), *sys.argv[1:]])
     return 0
 
 

@@ -528,40 +528,7 @@
           <div id="plotter-side-label">Your Kolam</div>
           <h3 id="plotter-side-title">Waiting for plotter</h3>
           <div id="plotter-side-copy">The plotter that will draw your kolam will light up here.</div>
-          <div id="plotter-state-list">
-            <div class="plotter-state-card" data-plotter-card="A">
-              <div class="plotter-state-meta">
-                <div class="plotter-state-name">Plotter A</div>
-                <div class="plotter-state-status" data-plotter-status="A">Standing By</div>
-              </div>
-              <img class="plotter-state-figure" data-plotter-image="A" src="./assets/svgs/plotter-inactive.svg"
-                alt="Plotter A inactive" />
-            </div>
-            <div class="plotter-state-card" data-plotter-card="B">
-              <div class="plotter-state-meta">
-                <div class="plotter-state-name">Plotter B</div>
-                <div class="plotter-state-status" data-plotter-status="B">Standing By</div>
-              </div>
-              <img class="plotter-state-figure" data-plotter-image="B" src="./assets/svgs/plotter-inactive.svg"
-                alt="Plotter B inactive" />
-            </div>
-            <div class="plotter-state-card" data-plotter-card="C">
-              <div class="plotter-state-meta">
-                <div class="plotter-state-name">Plotter C</div>
-                <div class="plotter-state-status" data-plotter-status="C">Standing By</div>
-              </div>
-              <img class="plotter-state-figure" data-plotter-image="C" src="./assets/svgs/plotter-inactive.svg"
-                alt="Plotter C inactive" />
-            </div>
-            <div class="plotter-state-card" data-plotter-card="D">
-              <div class="plotter-state-meta">
-                <div class="plotter-state-name">Plotter D</div>
-                <div class="plotter-state-status" data-plotter-status="D">Standing By</div>
-              </div>
-              <img class="plotter-state-figure" data-plotter-image="D" src="./assets/svgs/plotter-inactive.svg"
-                alt="Plotter D inactive" />
-            </div>
-          </div>
+          <div id="plotter-state-list" aria-live="polite"></div>
         </aside>
       </div>
     </div>
@@ -571,7 +538,13 @@
     const PAGE_BG = "#0255ff";
     const PLOTTER_ACTIVE_SVG_URL = "./assets/svgs/plotter-active.svg";
     const PLOTTER_INACTIVE_SVG_URL = "./assets/svgs/plotter-inactive.svg";
-    const PLOTTER_LABELS = ["A", "B", "C", "D"];
+    const FALLBACK_ACTIVE_PLOTTERS = [
+      { plotter_index: 1, plotter_label: "A" },
+      { plotter_index: 2, plotter_label: "B" },
+      { plotter_index: 4, plotter_label: "D" },
+    ];
+    const GAMEPAD_PLOTTER_BUTTON_PRIORITY = [2, 1, 3, 0];
+    const PLOTTER_STATE_FETCH_COOLDOWN_MS = 2000;
     const TASKS_VISION_VERSION = "0.10.22-rc.20250304";
     const VISION_BUNDLE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/vision_bundle.mjs`;
     const WASM_ROOT = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/wasm`;
@@ -615,17 +588,36 @@
     const PLOTTER_TRIGGER_COOLDOWN_MS = 1200;
     const LIGHTBOX_DURATION_MS = 7000;
     const STATUS_TEXT_FADE_MS = 180;
-    const PLOTTER_BRIDGE_URL = "http://127.0.0.1:8765";
+    const DEFAULT_PLOTTER_BRIDGE_BASE_URL = "http://localhost:8765";
     const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
     const PASSIVE_MODE_STATUS = "Passive mode is running. Show a hand or press any key to return to active mode.";
     const NEXT_DOT_COLOR = "#ffff00";
     const ERASE_TRACE_ARMED_STATUS = "Erase trace mode armed. Press P to retrace the packed 3x2 area in erase mode.";
+    const GAMEPAD_BUTTON_LABELS = new Map([
+      [0, "A"],
+      [1, "B"],
+      [2, "X"],
+      [3, "Y"],
+      [6, "B6"],
+      [12, "D-pad up"],
+      [13, "D-pad down"],
+    ]);
+    const GAMEPAD_SERVO_TOGGLE_BUTTON_INDEX = 6;
+    const GAMEPAD_PEN_UP_BUTTON_INDEX = 12;
+    const GAMEPAD_PEN_DOWN_BUTTON_INDEX = 13;
+    const GAMEPAD_WATCHED_BUTTON_INDICES = [
+      ...GAMEPAD_PLOTTER_BUTTON_PRIORITY,
+      GAMEPAD_SERVO_TOGGLE_BUTTON_INDEX,
+      GAMEPAD_PEN_UP_BUTTON_INDEX,
+      GAMEPAD_PEN_DOWN_BUTTON_INDEX,
+    ];
 
     const READY_STATUS = "Raise one hand to the camera! Pinch thumb + index near an unvisited pulli (dot) to start the kolam pattern.";
     const NEXT_BRANCH_STATUS = "Release to end branch or find an unvisited dot. Make a fist anytime to draw your kolam.";
     const ACTIVE_BRANCH_STATUS = "Keep pinching and move to neighboring pullis (dot) to build the skeleton. Release to end branch or find an unvisited dot. Make a fist anytime to draw your kolam.";
     const ALL_VISITED_STATUS = "All pullis (dot) have been visited. Form a fist to draw your kolam.";
     const BLOCKED_BRANCH_STATUS = "That branch is blocked. Move to an unvisited dot to start a new branch, or make a fist anytime to draw your kolam.";
+    const CAMERA_ROTATION_DEGREES = 0;
 
     const canvas = document.getElementById("output");
     const stageViewportEl = document.getElementById("stage-viewport");
@@ -637,19 +629,15 @@
     const lightboxFooterEl = document.getElementById("plotter-footer");
     const plotterSideTitleEl = document.getElementById("plotter-side-title");
     const plotterSideCopyEl = document.getElementById("plotter-side-copy");
-    const plotterCardEls = Array.from(document.querySelectorAll("[data-plotter-card]"));
-    const plotterStatusEls = new Map(
-      Array.from(document.querySelectorAll("[data-plotter-status]")).map((el) => [el.dataset.plotterStatus, el])
-    );
-    const plotterImageEls = new Map(
-      Array.from(document.querySelectorAll("[data-plotter-image]")).map((el) => [el.dataset.plotterImage, el])
-    );
+    const plotterStateListEl = document.getElementById("plotter-state-list");
     const ctx = canvas.getContext("2d");
 
     const video = document.createElement("video");
     video.autoplay = true;
     video.muted = true;
     video.playsInline = true;
+    const inferenceCanvas = document.createElement("canvas");
+    const inferenceCtx = inferenceCanvas.getContext("2d");
 
     let handLandmarker = null;
     let results = null;
@@ -670,11 +658,17 @@
     let lightboxEndsAtMs = 0;
     let lightboxMessage = "";
     let lightboxAfterStatus = "";
+    let lightboxAssignedPlotterLabel = null;
+    let lightboxPlotterFallbackCopy = "All plotters are busy right now!";
+    let lightboxPlotterPollId = 0;
+    let lightboxPlotterPollToken = 0;
     let exportCount = 0;
     let passiveModeState = "active";
     let passiveModeRequestId = 0;
     let lastUserActivityAtMs = performance.now();
     let eraseTraceModeArmed = false;
+    let activeGamepadIndex = null;
+    let activeGamepadPlotterIndex = null;
     let currentGridSize = GRID_SIZE_MIN;
     let smoothedPoint = null;
     let pinchPoint = null;
@@ -693,6 +687,194 @@
     const capArcs = [];
     const visitedDots = new Set();
     const visitedDotTimesMs = new Map();
+    const gamepadPressedStateByIndex = new Map();
+    const PLOTTER_BRIDGE_BASE_URL = resolvePlotterBridgeBaseUrl();
+    let availablePlotters = [];
+    let availablePlotterLabels = [];
+    let gamepadPlotterByButtonIndex = new Map();
+    let plotterCardEls = [];
+    let plotterStatusEls = new Map();
+    let plotterImageEls = new Map();
+    let lastPlotterStateFetchAtMs = -Infinity;
+
+    function resolvePlotterBridgeBaseUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const requestedBaseUrl = params.get("bridgeBase");
+      if (requestedBaseUrl) {
+        try {
+          return normalizeBridgeBaseUrl(requestedBaseUrl);
+        } catch (error) {
+          console.warn("Ignoring invalid bridgeBase query parameter.", error);
+        }
+      }
+
+      const requestedOrigin = params.get("bridge");
+      if (requestedOrigin) {
+        try {
+          return normalizeBridgeBaseUrl(new URL(requestedOrigin).origin);
+        } catch (error) {
+          console.warn("Ignoring invalid bridge query parameter.", error);
+        }
+      }
+
+      if (window.location.protocol.startsWith("http")) {
+        return normalizeBridgeBaseUrl(`${window.location.origin}/`);
+      }
+
+      return DEFAULT_PLOTTER_BRIDGE_BASE_URL;
+    }
+
+    function normalizeBridgeBaseUrl(value) {
+      const url = new URL(value, window.location.href);
+      return url.href.replace(/\/+$/, "");
+    }
+
+    function bridgeUrl(path) {
+      const normalizedPath = String(path || "").replace(/^\/+/, "");
+      return new URL(normalizedPath, `${PLOTTER_BRIDGE_BASE_URL}/`).toString();
+    }
+
+    function joinHumanList(items) {
+      if (items.length === 0) {
+        return "";
+      }
+      if (items.length === 1) {
+        return items[0];
+      }
+      if (items.length === 2) {
+        return `${items[0]} or ${items[1]}`;
+      }
+      return `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
+    }
+
+    function normalizePlotterLabel(label) {
+      if (typeof label !== "string") {
+        return null;
+      }
+      const trimmed = label.trim().toUpperCase();
+      return trimmed || null;
+    }
+
+    function defaultPlotterLabelForIndex(plotterIndex) {
+      if (!Number.isInteger(plotterIndex) || plotterIndex < 1) {
+        return `#${plotterIndex}`;
+      }
+      return String.fromCharCode("A".charCodeAt(0) + plotterIndex - 1);
+    }
+
+    function fallbackActivePlotters() {
+      return FALLBACK_ACTIVE_PLOTTERS.map((plotter) => ({
+        plotter_index: plotter.plotter_index,
+        plotter_label: plotter.plotter_label,
+      }));
+    }
+
+    function visibleBridgePlotters(plotters) {
+      if (!Array.isArray(plotters)) {
+        return [];
+      }
+
+      return plotters
+        .filter((plotter) => plotter && plotter.detected && Number.isInteger(plotter.plotter_index))
+        .map((plotter) => ({
+          plotter_index: plotter.plotter_index,
+          plotter_label: normalizePlotterLabel(plotter.plotter_label)
+            || defaultPlotterLabelForIndex(plotter.plotter_index),
+        }))
+        .sort((a, b) => a.plotter_index - b.plotter_index);
+    }
+
+    function cachePlotterStateElements() {
+      plotterCardEls = Array.from(plotterStateListEl.querySelectorAll("[data-plotter-card]"));
+      plotterStatusEls = new Map(
+        Array.from(plotterStateListEl.querySelectorAll("[data-plotter-status]")).map((el) => [el.dataset.plotterStatus, el])
+      );
+      plotterImageEls = new Map(
+        Array.from(plotterStateListEl.querySelectorAll("[data-plotter-image]")).map((el) => [el.dataset.plotterImage, el])
+      );
+    }
+
+    function syncGamepadPlotterBindings() {
+      gamepadPlotterByButtonIndex = new Map();
+      for (let i = 0; i < availablePlotters.length && i < GAMEPAD_PLOTTER_BUTTON_PRIORITY.length; i += 1) {
+        gamepadPlotterByButtonIndex.set(GAMEPAD_PLOTTER_BUTTON_PRIORITY[i], availablePlotters[i].plotter_index);
+      }
+
+      if (
+        activeGamepadPlotterIndex !== null
+        && !availablePlotters.some((plotter) => plotter.plotter_index === activeGamepadPlotterIndex)
+      ) {
+        activeGamepadPlotterIndex = null;
+      }
+    }
+
+    function renderPlotterStateCards() {
+      plotterStateListEl.innerHTML = availablePlotters
+        .map((plotter) => {
+          const plotterLabel = plotter.plotter_label;
+          return `
+            <div class="plotter-state-card" data-plotter-card="${plotterLabel}">
+              <div class="plotter-state-meta">
+                <div class="plotter-state-name">Plotter ${plotterLabel}</div>
+                <div class="plotter-state-status" data-plotter-status="${plotterLabel}">Standing By</div>
+              </div>
+              <img class="plotter-state-figure" data-plotter-image="${plotterLabel}" src="${PLOTTER_INACTIVE_SVG_URL}"
+                alt="Plotter ${plotterLabel} inactive" />
+            </div>
+          `;
+        })
+        .join("");
+      cachePlotterStateElements();
+      setLightboxAssignedPlotter(lightboxAssignedPlotterLabel);
+    }
+
+    function setAvailablePlotters(plotters) {
+      availablePlotters = plotters.length > 0 ? plotters : fallbackActivePlotters();
+      availablePlotterLabels = availablePlotters.map((plotter) => plotter.plotter_label);
+      syncGamepadPlotterBindings();
+      renderPlotterStateCards();
+    }
+
+    function gamepadPlotterPrompt() {
+      const buttonLabels = Array.from(gamepadPlotterByButtonIndex.keys()).map((buttonIndex) => gamepadButtonLabel(buttonIndex));
+      if (buttonLabels.length === 0) {
+        return "No active plotters are available right now.";
+      }
+      return `Pick a plotter first with ${joinHumanList(buttonLabels)}.`;
+    }
+
+    function gamepadConnectedStatus() {
+      const buttonLabels = Array.from(gamepadPlotterByButtonIndex.keys()).map((buttonIndex) => gamepadButtonLabel(buttonIndex));
+      if (buttonLabels.length === 0) {
+        return "Controller connected, but no active plotters are available.";
+      }
+      return `Controller connected. Press ${joinHumanList(buttonLabels)} to choose a plotter.`;
+    }
+
+    async function refreshAvailablePlotters(force = false) {
+      const nowMs = performance.now();
+      if (!force && nowMs - lastPlotterStateFetchAtMs < PLOTTER_STATE_FETCH_COOLDOWN_MS) {
+        return;
+      }
+
+      lastPlotterStateFetchAtMs = nowMs;
+      try {
+        const response = await fetch(bridgeUrl("/dashboard/state"));
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          return;
+        }
+
+        const bridgePlotters = visibleBridgePlotters(data?.plotters);
+        if (bridgePlotters.length > 0) {
+          setAvailablePlotters(bridgePlotters);
+        }
+      } catch (error) {
+        console.debug("Could not refresh active plotter state.", error);
+      }
+    }
+
+    setAvailablePlotters(fallbackActivePlotters());
 
     function setStatus(text) {
       if (text === statusText) return;
@@ -715,6 +897,17 @@
         statusFadeTimeoutId = 0;
       }, STATUS_TEXT_FADE_MS);
     }
+
+    window.ofCurvesAndHandsNativeStatus = (text) => {
+      if (typeof text !== "string") {
+        return;
+      }
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+      setStatus(trimmed);
+    };
 
     function pickRandomGridSize(excludeSize = null) {
       const choices = [];
@@ -743,7 +936,7 @@
         options.body = JSON.stringify(body);
       }
 
-      const response = await fetch(`${PLOTTER_BRIDGE_URL}${path}`, options);
+      const response = await fetch(bridgeUrl(path), options);
       const data = await response.json().catch(() => ({}));
       return { response, data };
     }
@@ -755,7 +948,7 @@
       }
     }
 
-    async function ensureActiveModeForKeyboardAction(reason = "keyboard") {
+    async function ensureActiveModeForManualAction(reason = "manual") {
       lastUserActivityAtMs = performance.now();
       if (passiveModeState === "active") {
         return true;
@@ -776,9 +969,44 @@
       return true;
     }
 
-    async function sendBridgeControl(path, successPrefix) {
+    function plotterLabelForIndex(plotterIndex) {
+      const matchedPlotter = availablePlotters.find((plotter) => plotter.plotter_index === plotterIndex);
+      if (matchedPlotter) {
+        return matchedPlotter.plotter_label;
+      }
+      return defaultPlotterLabelForIndex(plotterIndex);
+    }
+
+    function gamepadButtonLabel(buttonIndex) {
+      return GAMEPAD_BUTTON_LABELS.get(buttonIndex) || `button ${buttonIndex}`;
+    }
+
+    function currentGamepad() {
+      if (typeof navigator.getGamepads !== "function") {
+        return null;
+      }
+
+      const gamepads = navigator.getGamepads();
+      if (!gamepads) {
+        activeGamepadIndex = null;
+        return null;
+      }
+
+      if (activeGamepadIndex !== null) {
+        const activeGamepad = gamepads[activeGamepadIndex];
+        if (activeGamepad && activeGamepad.connected) {
+          return activeGamepad;
+        }
+      }
+
+      const fallbackGamepad = Array.from(gamepads).find((gamepad) => gamepad && gamepad.connected) || null;
+      activeGamepadIndex = fallbackGamepad ? fallbackGamepad.index : null;
+      return fallbackGamepad;
+    }
+
+    async function sendBridgeControl(path, successPrefix, body = undefined) {
       try {
-        const { response, data } = await postBridgeJson(path);
+        const { response, data } = await postBridgeJson(path, body);
         const message = data?.message || `Bridge error (${response.status})`;
 
         if (!response.ok) {
@@ -790,6 +1018,117 @@
       } catch (error) {
         console.error(error);
         setStatus(`${successPrefix}: could not reach plotter bridge`);
+      }
+    }
+
+    async function setActiveGamepadPlotter(plotterIndex, buttonIndex) {
+      await refreshAvailablePlotters();
+      activeGamepadPlotterIndex = plotterIndex;
+      eraseTraceModeArmed = false;
+      if (!(await ensureActiveModeForManualAction("gamepad"))) {
+        return;
+      }
+
+      await sendBridgeControl(
+        "/controller/select-plotter",
+        "Controller selection",
+        {
+          plotter_index: plotterIndex,
+          source: "web-gamepad",
+        }
+      );
+    }
+
+    async function sendGamepadPenCommand(path, successPrefix) {
+      await refreshAvailablePlotters();
+      if (!(await ensureActiveModeForManualAction("gamepad"))) {
+        return;
+      }
+
+      eraseTraceModeArmed = false;
+      if (activeGamepadPlotterIndex === null) {
+        setStatus(gamepadPlotterPrompt());
+        return;
+      }
+
+      const plotterIndex = activeGamepadPlotterIndex;
+      const plotterLabel = plotterLabelForIndex(plotterIndex);
+      await sendBridgeControl(
+        path,
+        `${successPrefix} on Plotter ${plotterLabel}`,
+        {
+          plotter_index: plotterIndex,
+          source: "web-gamepad",
+        }
+      );
+    }
+
+    async function sendGamepadServoToggleCommand() {
+      await refreshAvailablePlotters();
+      if (!(await ensureActiveModeForManualAction("gamepad"))) {
+        return;
+      }
+
+      eraseTraceModeArmed = false;
+      if (activeGamepadPlotterIndex === null) {
+        setStatus(gamepadPlotterPrompt());
+        return;
+      }
+
+      const plotterIndex = activeGamepadPlotterIndex;
+      const plotterLabel = plotterLabelForIndex(plotterIndex);
+      await sendBridgeControl(
+        "/controller/servo-toggle",
+        `Servo toggle on Plotter ${plotterLabel}`,
+        {
+          plotter_index: plotterIndex,
+          source: "web-gamepad",
+        }
+      );
+    }
+
+    function handleGamepadButtonPress(buttonIndex) {
+      const selectedPlotterIndex = gamepadPlotterByButtonIndex.get(buttonIndex);
+      if (selectedPlotterIndex !== undefined) {
+        void setActiveGamepadPlotter(selectedPlotterIndex, buttonIndex);
+        return;
+      }
+
+      if (buttonIndex === GAMEPAD_SERVO_TOGGLE_BUTTON_INDEX) {
+        void sendGamepadServoToggleCommand();
+        return;
+      }
+
+      if (buttonIndex === GAMEPAD_PEN_UP_BUTTON_INDEX) {
+        void sendGamepadPenCommand("/controller/pen-up", "Pen up");
+        return;
+      }
+
+      if (buttonIndex === GAMEPAD_PEN_DOWN_BUTTON_INDEX) {
+        void sendGamepadPenCommand("/controller/pen-down", "Pen down");
+      }
+    }
+
+    function updateGamepadControls() {
+      const gamepad = currentGamepad();
+      if (!gamepad) {
+        return;
+      }
+
+      let pressedState = gamepadPressedStateByIndex.get(gamepad.index);
+      if (!pressedState) {
+        pressedState = new Map();
+        gamepadPressedStateByIndex.set(gamepad.index, pressedState);
+      }
+
+      for (const buttonIndex of GAMEPAD_WATCHED_BUTTON_INDICES) {
+        const buttonState = gamepad.buttons?.[buttonIndex];
+        const isPressed = Boolean(buttonState && buttonState.pressed);
+        const wasPressed = Boolean(pressedState.get(buttonIndex));
+        if (isPressed && !wasPressed) {
+          handleGamepadButtonPress(buttonIndex);
+        }
+        pressedState.set(buttonIndex, isPressed);
       }
     }
 
@@ -910,6 +1249,44 @@
       canvas.style.width = `${cssWidth}px`;
       canvas.style.height = `${cssHeight}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function syncInferenceCanvasSize() {
+      const sourceWidth = video.videoWidth || 0;
+      const sourceHeight = video.videoHeight || 0;
+      if (!sourceWidth || !sourceHeight || !inferenceCtx) {
+        return false;
+      }
+
+      if (inferenceCanvas.width !== sourceWidth || inferenceCanvas.height !== sourceHeight) {
+        inferenceCanvas.width = sourceWidth;
+        inferenceCanvas.height = sourceHeight;
+      }
+
+      return true;
+    }
+
+    function getHandposeFrameSource() {
+      const normalizedRotation = ((CAMERA_ROTATION_DEGREES % 360) + 360) % 360;
+      if (normalizedRotation === 0 || !syncInferenceCanvasSize()) {
+        return video;
+      }
+
+      const frameWidth = inferenceCanvas.width;
+      const frameHeight = inferenceCanvas.height;
+      const rotationRadians = (normalizedRotation * Math.PI) / 180;
+
+      // Rotate the raw webcam feed before inference so the detector and UI both
+      // operate on an upright hand when the camera is mounted upside down.
+      inferenceCtx.save();
+      inferenceCtx.setTransform(1, 0, 0, 1, 0, 0);
+      inferenceCtx.clearRect(0, 0, frameWidth, frameHeight);
+      inferenceCtx.translate(frameWidth / 2, frameHeight / 2);
+      inferenceCtx.rotate(rotationRadians);
+      inferenceCtx.drawImage(video, -frameWidth / 2, -frameHeight / 2, frameWidth, frameHeight);
+      inferenceCtx.restore();
+
+      return inferenceCanvas;
     }
 
     function getDrawRect() {
@@ -1432,16 +1809,17 @@
     }
 
     function setLightboxAssignedPlotter(label = null) {
-      const normalizedLabel = typeof label === "string" ? label.trim().toUpperCase() : null;
+      const normalizedLabel = normalizePlotterLabel(label);
+      lightboxAssignedPlotterLabel = normalizedLabel;
       if (plotterSideTitleEl) {
         plotterSideTitleEl.textContent = normalizedLabel ? `Plotter ${normalizedLabel}` : "Waiting for plotter";
       }
       if (plotterSideCopyEl) {
         plotterSideCopyEl.textContent = normalizedLabel
           ? `Look to plotter ${normalizedLabel} for your kolam!`
-          : "All plotters are busy right now!";
+          : lightboxPlotterFallbackCopy;
       }
-      for (const plotterLabel of PLOTTER_LABELS) {
+      for (const plotterLabel of availablePlotterLabels) {
         const isActive = normalizedLabel === plotterLabel;
         const cardEl = plotterCardEls.find((el) => el.dataset.plotterCard === plotterLabel);
         const statusEl = plotterStatusEls.get(plotterLabel);
@@ -1459,12 +1837,64 @@
       }
     }
 
+    function stopLightboxPlotterPolling() {
+      if (lightboxPlotterPollId) {
+        window.clearTimeout(lightboxPlotterPollId);
+        lightboxPlotterPollId = 0;
+      }
+      lightboxPlotterPollToken += 1;
+    }
+
+    async function syncLightboxAssignedPlotter(token) {
+      if (!lightboxVisible || token !== lightboxPlotterPollToken || lightboxAssignedPlotterLabel) {
+        return;
+      }
+
+      try {
+        const response = await fetch(bridgeUrl("/dashboard/state"));
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !lightboxVisible || token !== lightboxPlotterPollToken || lightboxAssignedPlotterLabel) {
+          return;
+        }
+
+        const bridgePlotters = visibleBridgePlotters(data?.plotters);
+        if (bridgePlotters.length > 0) {
+          setAvailablePlotters(bridgePlotters);
+        }
+
+        const busyPlotters = Array.isArray(data?.plotters)
+          ? data.plotters.filter((plotter) => plotter && plotter.status === "busy" && plotter.plotter_label)
+          : [];
+        if (busyPlotters.length === 1) {
+          setLightboxAssignedPlotter(busyPlotters[0].plotter_label);
+          return;
+        }
+      } catch (error) {
+        console.debug("Could not fetch live plotter assignment.", error);
+      }
+
+      if (!lightboxVisible || token !== lightboxPlotterPollToken || lightboxAssignedPlotterLabel) {
+        return;
+      }
+
+      lightboxPlotterPollId = window.setTimeout(() => {
+        void syncLightboxAssignedPlotter(token);
+      }, 250);
+    }
+
+    function startLightboxPlotterPolling() {
+      stopLightboxPlotterPolling();
+      const token = lightboxPlotterPollToken;
+      void syncLightboxAssignedPlotter(token);
+    }
+
     function openPlotterLightbox(title, message = "", previewSvg = "", afterStatus = "") {
       lightboxVisible = true;
       lightboxEndsAtMs = performance.now() + LIGHTBOX_DURATION_MS;
       lightboxTitleEl.textContent = title;
       lightboxMessage = message;
       lightboxAfterStatus = afterStatus;
+      lightboxPlotterFallbackCopy = "Assigning your kolam to an available plotter...";
       lightboxMessageEl.textContent = message;
       if (previewSvg) {
         lightboxPreviewEl.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(previewSvg)}`;
@@ -1473,6 +1903,7 @@
       }
       setLightboxAssignedPlotter(null);
       lightboxEl.classList.add("visible");
+      startLightboxPlotterPolling();
       updateLightboxCountdown();
     }
 
@@ -1484,6 +1915,8 @@
       lightboxVisible = false;
       lightboxEndsAtMs = 0;
       lightboxMessage = "";
+      lightboxPlotterFallbackCopy = "All plotters are busy right now!";
+      stopLightboxPlotterPolling();
       lightboxEl.classList.remove("visible");
       lightboxMessageEl.textContent = "";
       lightboxFooterEl.textContent = "";
@@ -2257,7 +2690,7 @@
       }
 
       try {
-        const response = await fetch(`${PLOTTER_BRIDGE_URL}/plot-svg`, {
+        const response = await fetch(bridgeUrl("/plot-svg"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -2272,17 +2705,19 @@
         if (!response.ok) {
           const message = data?.message || `Plotter bridge error (${response.status})`;
           if (response.status === 409 || data?.status === "busy") {
-            lightboxTitleEl.textContent = "Plotter Busy";
-            lightboxMessage = message;
+            lightboxTitleEl.textContent = "All Plotters Busy";
+            lightboxMessage = "All available plotters are currently busy. Try again in a moment.";
             lightboxMessageEl.textContent = lightboxMessage;
+            lightboxPlotterFallbackCopy = "All plotters are busy right now!";
             setLightboxAssignedPlotter(null);
-            lightboxAfterStatus = `${message} ${READY_STATUS}`;
+            lightboxAfterStatus = `${lightboxMessage} ${READY_STATUS}`;
             return;
           }
 
           lightboxTitleEl.textContent = "Plot Failed";
           lightboxMessage = message;
           lightboxMessageEl.textContent = lightboxMessage;
+          lightboxPlotterFallbackCopy = "The plotter assignment could not be confirmed.";
           setLightboxAssignedPlotter(null);
           lightboxAfterStatus = `${message} ${READY_STATUS}`;
           return;
@@ -2299,30 +2734,35 @@
           lightboxTitleEl.textContent = "Plotter Unavailable";
           lightboxMessage = data.message || "AxiDraw was detected but could not be opened.";
           lightboxMessageEl.textContent = lightboxMessage;
+          lightboxPlotterFallbackCopy = "A plotter was detected, but it could not be opened.";
           setLightboxAssignedPlotter(null);
           lightboxAfterStatus = `${lightboxMessage} ${READY_STATUS}`;
         } else if (data.status === "no_plotter") {
           lightboxTitleEl.textContent = "No Plotter Connected";
           lightboxMessage = "No plotter connected.";
           lightboxMessageEl.textContent = lightboxMessage;
+          lightboxPlotterFallbackCopy = "No plotter is connected right now.";
           setLightboxAssignedPlotter(null);
           lightboxAfterStatus = `No plotter connected. Grid cleared. ${READY_STATUS}`;
         } else if (data.status === "multiple_plotters") {
           lightboxTitleEl.textContent = "Too Many Plotters";
           lightboxMessage = "Multiple plotters connected.";
           lightboxMessageEl.textContent = lightboxMessage;
+          lightboxPlotterFallbackCopy = "Too many plotters are connected for this client flow.";
           setLightboxAssignedPlotter(null);
           lightboxAfterStatus = data.message || "Too many plotters connected.";
         } else if (data.status === "busy") {
-          lightboxTitleEl.textContent = "Plotter Busy";
-          lightboxMessage = "Plotter is busy.";
+          lightboxTitleEl.textContent = "All Plotters Busy";
+          lightboxMessage = "All available plotters are currently busy. Try again in a moment.";
           lightboxMessageEl.textContent = lightboxMessage;
+          lightboxPlotterFallbackCopy = "All plotters are busy right now!";
           setLightboxAssignedPlotter(null);
-          lightboxAfterStatus = "Plotter is busy. Try again.";
+          lightboxAfterStatus = `${lightboxMessage} ${READY_STATUS}`;
         } else {
           lightboxTitleEl.textContent = "Plotter Response";
           lightboxMessage = data.message || "Plotter response received.";
           lightboxMessageEl.textContent = lightboxMessage;
+          lightboxPlotterFallbackCopy = "The plotter assignment could not be confirmed.";
           setLightboxAssignedPlotter(null);
           lightboxAfterStatus = data.message || "Plotter response received.";
         }
@@ -2334,6 +2774,7 @@
         lightboxTitleEl.textContent = "You've drawn a kolam!";
         lightboxMessage = `Take a look at the plotters on your left. ${error?.message || "Plotter bridge is offline. Start python3 plotter-bridge/app.py"}`;
         lightboxMessageEl.textContent = lightboxMessage;
+        lightboxPlotterFallbackCopy = "The plotter bridge is offline right now.";
         setLightboxAssignedPlotter(null);
         lightboxAfterStatus = lightboxMessage;
       } finally {
@@ -2577,10 +3018,11 @@
     function loop() {
       if (handLandmarker && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
-        results = handLandmarker.detectForVideo(video, performance.now());
+        results = handLandmarker.detectForVideo(getHandposeFrameSource(), performance.now());
       }
 
       drawFrame();
+      updateGamepadControls();
       requestAnimationFrame(loop);
     }
 
@@ -2591,6 +3033,7 @@
         await setupCamera();
         setStatus("Loading hand model...");
         await createLandmarker();
+        await refreshAvailablePlotters(true);
         clearGuidedKolam(true, null);
         lastUserActivityAtMs = performance.now();
         setStatus(READY_STATUS);
@@ -2614,13 +3057,28 @@
         noteUserActivity(eventName);
       }, { passive: true });
     }
+    window.addEventListener("gamepadconnected", (event) => {
+      activeGamepadIndex = event.gamepad.index;
+      gamepadPressedStateByIndex.delete(event.gamepad.index);
+      setStatus(gamepadConnectedStatus());
+      void refreshAvailablePlotters(true).then(() => {
+        setStatus(gamepadConnectedStatus());
+      });
+    });
+    window.addEventListener("gamepaddisconnected", (event) => {
+      gamepadPressedStateByIndex.delete(event.gamepad.index);
+      if (activeGamepadIndex === event.gamepad.index) {
+        activeGamepadIndex = null;
+      }
+      setStatus("Controller disconnected.");
+    });
     window.addEventListener("keydown", async (event) => {
       if (event.repeat) {
         return;
       }
 
       const upperKey = event.key.length === 1 ? event.key.toUpperCase() : event.key;
-      if (lightboxVisible && PLOTTER_LABELS.includes(upperKey)) {
+      if (lightboxVisible && availablePlotterLabels.includes(upperKey)) {
         setLightboxAssignedPlotter(upperKey);
         return;
       }
@@ -2630,7 +3088,7 @@
       const shouldCarryKeyThroughPassiveExit = isEraseTraceArmKey || (isEraseTraceRunKey && eraseTraceModeArmed);
 
       if (shouldCarryKeyThroughPassiveExit) {
-        if (!(await ensureActiveModeForKeyboardAction("keyboard"))) {
+        if (!(await ensureActiveModeForManualAction("keyboard"))) {
           return;
         }
       } else {

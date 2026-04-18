@@ -59,14 +59,28 @@ PLOTTER_BRIDGE_URL = os.environ.get(
 ARDUINO_SERVO_TIMEOUT_SECONDS = float(os.environ.get("ARDUINO_SERVO_TIMEOUT_SECONDS", "10.0"))
 ARDUINO_REDRAW_PAUSE_SECONDS = float(os.environ.get("ARDUINO_REDRAW_PAUSE_SECONDS", "2.0"))
 LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN = os.environ.get("ACTIVE_GUIDED_AREA_SIZE_IN")
+DEFAULT_PACKED_AREA_WIDTH_IN_FALLBACK = 8.75
+DEFAULT_PACKED_AREA_HEIGHT_IN_FALLBACK = 2.75
+DEFAULT_PACKED_AREA_COLUMNS_FALLBACK = 3
+DEFAULT_PACKED_AREA_ROWS_FALLBACK = 1
 DEFAULT_PACKED_AREA_WIDTH_IN = float(
-    os.environ.get("ACTIVE_GUIDED_AREA_WIDTH_IN", LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or "6.0")
+    os.environ.get(
+        "ACTIVE_GUIDED_AREA_WIDTH_IN",
+        LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or str(DEFAULT_PACKED_AREA_WIDTH_IN_FALLBACK),
+    )
 )
 DEFAULT_PACKED_AREA_HEIGHT_IN = float(
-    os.environ.get("ACTIVE_GUIDED_AREA_HEIGHT_IN", LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or "4.0")
+    os.environ.get(
+        "ACTIVE_GUIDED_AREA_HEIGHT_IN",
+        LEGACY_ACTIVE_GUIDED_AREA_SIZE_IN or str(DEFAULT_PACKED_AREA_HEIGHT_IN_FALLBACK),
+    )
 )
-DEFAULT_PACKED_AREA_COLUMNS = int(os.environ.get("ACTIVE_GUIDED_AREA_COLUMNS", "3"))
-DEFAULT_PACKED_AREA_ROWS = int(os.environ.get("ACTIVE_GUIDED_AREA_ROWS", "2"))
+DEFAULT_PACKED_AREA_COLUMNS = int(
+    os.environ.get("ACTIVE_GUIDED_AREA_COLUMNS", str(DEFAULT_PACKED_AREA_COLUMNS_FALLBACK))
+)
+DEFAULT_PACKED_AREA_ROWS = int(
+    os.environ.get("ACTIVE_GUIDED_AREA_ROWS", str(DEFAULT_PACKED_AREA_ROWS_FALLBACK))
+)
 DEFAULT_PACKED_AREA_MARGIN_IN = float(os.environ.get("ACTIVE_GUIDED_AREA_MARGIN_IN", "0.0"))
 DEFAULT_PACKED_AREA_GAP_IN = float(os.environ.get("ACTIVE_GUIDED_AREA_GAP_IN", "0.25"))
 DEFAULT_PACKED_AREA_ORIGIN_X_IN = float(os.environ.get("ACTIVE_GUIDED_AREA_ORIGIN_X_IN", "1.0"))
@@ -76,17 +90,17 @@ DEFAULT_PACKED_AREA_ERASE_SWEEP_STEP_IN = float(
 )
 LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN = os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN")
 DEFAULT_PACKED_AREA_ERASE_X_OVERSCAN_LEFT_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_LEFT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_LEFT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "0.5")
 )
 DEFAULT_PACKED_AREA_ERASE_X_OVERSCAN_RIGHT_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_RIGHT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_X_OVERSCAN_RIGHT_IN", LEGACY_ACTIVE_GUIDED_ERASE_X_OVERSCAN_IN or "0.5")
 )
 LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN = os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN")
 DEFAULT_PACKED_AREA_ERASE_Y_OVERSCAN_BOTTOM_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_BOTTOM_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_BOTTOM_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "0.5")
 )
 DEFAULT_PACKED_AREA_ERASE_Y_OVERSCAN_TOP_IN = float(
-    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_TOP_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "1.0")
+    os.environ.get("ACTIVE_GUIDED_ERASE_Y_OVERSCAN_TOP_IN", LEGACY_ACTIVE_GUIDED_ERASE_Y_OVERSCAN_IN or "0.5")
 )
 DEFAULT_PACKED_AREA_ERASE_OFFSET_X_IN = float(os.environ.get("ACTIVE_GUIDED_ERASE_OFFSET_X_IN", "0.0"))
 DEFAULT_PACKED_AREA_ERASE_OFFSET_Y_IN = float(os.environ.get("ACTIVE_GUIDED_ERASE_OFFSET_Y_IN", "0.0"))
@@ -1682,6 +1696,13 @@ def parse_args() -> argparse.Namespace:
         help="Legacy single-plotter port option (same as first item in --ports).",
     )
     parser.add_argument(
+        "--plotter-indices",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Optional logical plotter indices matching --ports, preserving bridge servo mapping.",
+    )
+    parser.add_argument(
         "--size",
         type=int,
         default=None,
@@ -2003,22 +2024,35 @@ def main() -> int:
             print("Use distinct values in --ports.")
             return 1
 
-        for idx, port in enumerate(selected_ports, start=1):
-            print(f"Using plotter {idx}: {port}")
+        logical_plotter_indices = list(range(1, len(selected_ports) + 1))
+        if args.plotter_indices:
+            if len(args.plotter_indices) != len(selected_ports):
+                print("The number of --plotter-indices entries must match the selected plotters.")
+                return 1
+            if any(index < 1 for index in args.plotter_indices):
+                print("Plotter indices must be positive integers.")
+                return 1
+            if len(set(args.plotter_indices)) != len(args.plotter_indices):
+                print("Plotter indices must be distinct.")
+                return 1
+            logical_plotter_indices = list(args.plotter_indices)
 
-        for idx, port in enumerate(selected_ports, start=1):
+        for logical_index, port in zip(logical_plotter_indices, selected_ports):
+            print(f"Using plotter {logical_index}: {port}")
+
+        for logical_index, port in zip(logical_plotter_indices, selected_ports):
             ad = build_plotter(
                 port=port,
                 speed_pendown=args.speed_pendown,
                 speed_penup=args.speed_penup,
                 accel=args.accel,
             )
-            label = f"plotter_{idx}"
+            label = f"plotter_{logical_index}"
             connected_port = connected_port_name(ad)
             print(f"[{label}] connected on {connected_port}")
-            plotters.append((label, ad))
+            plotters.append((label, logical_index, ad))
 
-        connected_ports = [connected_port_name(ad) for _, ad in plotters]
+        connected_ports = [connected_port_name(ad) for _, _, ad in plotters]
         if len(set(connected_ports)) != args.count:
             raise RuntimeError(
                 f"Connections resolved to fewer than {args.count} unique AxiDraw ports. "
@@ -2027,10 +2061,10 @@ def main() -> int:
 
         if args.count == 1:
             preview = None if args.no_preview else PreviewWindow()
-            label, ad = plotters[0]
+            label, logical_index, ad = plotters[0]
             pattern_count = run_plotter_session(
                 label=label,
-                plotter_index=0,
+                plotter_index=logical_index - 1,
                 session_seed=session_seed,
                 session_start=session_start,
                 session_deadline=session_deadline,
@@ -2068,11 +2102,11 @@ def main() -> int:
 
             print(f"[schedule] Starting {phase_name} with {len(subset_indices)} plotter(s).")
 
-            def worker(result: PlotterRunResult, idx: int, ad: axidraw.AxiDraw) -> None:
+            def worker(result: PlotterRunResult, logical_index: int, ad: axidraw.AxiDraw) -> None:
                 try:
                     result.patterns_drawn = run_plotter_session(
                         label=result.label,
-                        plotter_index=idx,
+                        plotter_index=logical_index - 1,
                         session_seed=session_seed,
                         session_start=session_start,
                         session_deadline=phase_deadline,
@@ -2100,8 +2134,8 @@ def main() -> int:
                     print(f"[{result.label}] Error: {result.error}")
 
             for result, idx in zip(results, subset_indices):
-                _, ad = plotters[idx]
-                thread = threading.Thread(target=worker, args=(result, idx, ad), daemon=True)
+                _, logical_index, ad = plotters[idx]
+                thread = threading.Thread(target=worker, args=(result, logical_index, ad), daemon=True)
                 active_threads.append(thread)
                 thread.start()
 
