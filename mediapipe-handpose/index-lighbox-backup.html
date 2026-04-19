@@ -263,7 +263,7 @@
 
     #plotter-panel {
       position: relative;
-      width: min(88vw, 840px);
+      width: min(82vw, 720px);
       height: min(80vh, 760px);
       max-height: min(80vh, 760px);
       overflow: visible;
@@ -315,7 +315,7 @@
 
     #plotter-layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 420px;
+      grid-template-columns: minmax(0, 1fr) 300px;
       grid-template-rows: 1fr;
       align-items: stretch;
       height: 100%;
@@ -338,7 +338,7 @@
       min-height: 0;
       height: 100%;
       box-sizing: border-box;
-      padding: 58px 36px 42px;
+      padding: 58px 28px 42px;
       display: flex;
       flex-direction: column;
       gap: 18px;
@@ -362,32 +362,65 @@
     #plotter-side-copy {
       color: rgba(40, 67, 186, 0.78);
       font: 600 14px/1.4 var(--font-ui);
-      max-width: 30ch;
+      max-width: 18ch;
     }
 
-    #plotter-mockup-shell {
-      flex: 1;
-      min-height: 320px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    #plotter-state-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .plotter-state-card {
+      display: grid;
+      grid-template-columns: 1fr;
+      justify-items: start;
+      gap: 12px;
+      padding: 14px;
       border: 1px solid rgba(74, 103, 226, 0.16);
       background: rgba(216, 222, 240, 0.34);
-      padding: 28px;
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
     }
 
-    #plotter-mockup-image {
-      display: block;
-      width: 100%;
-      max-width: 360px;
+    .plotter-state-card.active {
+      border-color: #0156fb;
+      background: #0156fb;
+      transform: translateX(-2px);
+    }
+
+    .plotter-state-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .plotter-state-name {
+      color: var(--plotter-text);
+      font: 600 15px/1.2 var(--font-ui);
+      letter-spacing: -0.01em;
+    }
+
+    .plotter-state-status {
+      color: rgba(40, 67, 186, 0.66);
+      font: 600 11px/1.2 var(--font-ui);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .plotter-state-card.active .plotter-state-status {
+      color: rgba(255, 255, 255, 0.86);
+    }
+
+    .plotter-state-card.active .plotter-state-name {
+      color: #ffffff;
+    }
+
+    .plotter-state-figure {
+      width: 84px;
       height: auto;
-      object-fit: contain;
-      opacity: 0;
-      transition: opacity 120ms ease;
-    }
-
-    #plotter-mockup-image.visible {
-      opacity: 1;
+      display: block;
+      flex: 0 0 auto;
     }
 
     #plotter-title {
@@ -438,7 +471,7 @@
 
     @media (max-width: 760px) {
       #plotter-panel {
-        width: min(92vw, 840px);
+        width: min(92vw, 720px);
         height: auto;
       }
 
@@ -458,8 +491,9 @@
         padding: 20px 24px 28px;
       }
 
-      #plotter-mockup-shell {
-        min-height: 240px;
+      #plotter-state-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
   </style>
@@ -493,10 +527,8 @@
         <aside id="plotter-side" aria-label="Plotter status">
           <div id="plotter-side-label">Your Kolam</div>
           <h3 id="plotter-side-title">Waiting for plotter</h3>
-          <div id="plotter-side-copy">The plotter that will draw your kolam will appear here.</div>
-          <div id="plotter-mockup-shell" aria-live="polite">
-            <img id="plotter-mockup-image" alt="" hidden />
-          </div>
+          <div id="plotter-side-copy">The plotter that will draw your kolam will light up here.</div>
+          <div id="plotter-state-list" aria-live="polite"></div>
         </aside>
       </div>
     </div>
@@ -504,11 +536,8 @@
 
   <script type="module">
     const PAGE_BG = "#0255ff";
-    const PLOTTER_MOCKUP_URL_BY_LABEL = Object.freeze({
-      A: "./assets/plotter-mockup-01.png",
-      B: "./assets/plotter-mockup-02.png",
-      D: "./assets/plotter-mockup-03.png",
-    });
+    const PLOTTER_ACTIVE_SVG_URL = "./assets/svgs/plotter-active.svg";
+    const PLOTTER_INACTIVE_SVG_URL = "./assets/svgs/plotter-inactive.svg";
     const FALLBACK_ACTIVE_PLOTTERS = [
       { plotter_index: 1, plotter_label: "A" },
       { plotter_index: 2, plotter_label: "B" },
@@ -559,7 +588,6 @@
     const PLOTTER_TRIGGER_COOLDOWN_MS = 1200;
     const LIGHTBOX_DURATION_MS = 7000;
     const STATUS_TEXT_FADE_MS = 180;
-    const STATUS_TEXT_MIN_VISIBLE_MS = 900;
     const DEFAULT_PLOTTER_BRIDGE_BASE_URL = "http://localhost:8765";
     const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
     const PASSIVE_MODE_STATUS = "Passive mode is running. Show a hand or press any key to return to active mode.";
@@ -601,7 +629,7 @@
     const lightboxFooterEl = document.getElementById("plotter-footer");
     const plotterSideTitleEl = document.getElementById("plotter-side-title");
     const plotterSideCopyEl = document.getElementById("plotter-side-copy");
-    const plotterMockupImageEl = document.getElementById("plotter-mockup-image");
+    const plotterStateListEl = document.getElementById("plotter-state-list");
     const ctx = canvas.getContext("2d");
 
     const video = document.createElement("video");
@@ -618,10 +646,7 @@
     let cssHeight = stageViewportEl.clientHeight || window.innerHeight;
     let dpr = window.devicePixelRatio || 1;
     let statusText = "";
-    let displayedStatusText = "";
     let statusFadeTimeoutId = 0;
-    let statusPendingTimeoutId = 0;
-    let statusLastCommitAtMs = 0;
 
     let isPinching = false;
     let isDrawingKolam = false;
@@ -667,6 +692,9 @@
     let availablePlotters = [];
     let availablePlotterLabels = [];
     let gamepadPlotterByButtonIndex = new Map();
+    let plotterCardEls = [];
+    let plotterStatusEls = new Map();
+    let plotterImageEls = new Map();
     let lastPlotterStateFetchAtMs = -Infinity;
 
     function resolvePlotterBridgeBaseUrl() {
@@ -756,6 +784,16 @@
         .sort((a, b) => a.plotter_index - b.plotter_index);
     }
 
+    function cachePlotterStateElements() {
+      plotterCardEls = Array.from(plotterStateListEl.querySelectorAll("[data-plotter-card]"));
+      plotterStatusEls = new Map(
+        Array.from(plotterStateListEl.querySelectorAll("[data-plotter-status]")).map((el) => [el.dataset.plotterStatus, el])
+      );
+      plotterImageEls = new Map(
+        Array.from(plotterStateListEl.querySelectorAll("[data-plotter-image]")).map((el) => [el.dataset.plotterImage, el])
+      );
+    }
+
     function syncGamepadPlotterBindings() {
       gamepadPlotterByButtonIndex = new Map();
       for (let i = 0; i < availablePlotters.length && i < GAMEPAD_PLOTTER_BUTTON_PRIORITY.length; i += 1) {
@@ -770,11 +808,31 @@
       }
     }
 
+    function renderPlotterStateCards() {
+      plotterStateListEl.innerHTML = availablePlotters
+        .map((plotter) => {
+          const plotterLabel = plotter.plotter_label;
+          return `
+            <div class="plotter-state-card" data-plotter-card="${plotterLabel}">
+              <div class="plotter-state-meta">
+                <div class="plotter-state-name">Plotter ${plotterLabel}</div>
+                <div class="plotter-state-status" data-plotter-status="${plotterLabel}">Standing By</div>
+              </div>
+              <img class="plotter-state-figure" data-plotter-image="${plotterLabel}" src="${PLOTTER_INACTIVE_SVG_URL}"
+                alt="Plotter ${plotterLabel} inactive" />
+            </div>
+          `;
+        })
+        .join("");
+      cachePlotterStateElements();
+      setLightboxAssignedPlotter(lightboxAssignedPlotterLabel);
+    }
+
     function setAvailablePlotters(plotters) {
       availablePlotters = plotters.length > 0 ? plotters : fallbackActivePlotters();
       availablePlotterLabels = availablePlotters.map((plotter) => plotter.plotter_label);
       syncGamepadPlotterBindings();
-      setLightboxAssignedPlotter(lightboxAssignedPlotterLabel);
+      renderPlotterStateCards();
     }
 
     function gamepadPlotterPrompt() {
@@ -818,14 +876,17 @@
 
     setAvailablePlotters(fallbackActivePlotters());
 
-    function commitStatusText(nextText) {
+    function setStatus(text) {
+      if (text === statusText) return;
+      const nextText = text;
+      const isFirstStatus = !statusText;
+      statusText = nextText;
+
       window.clearTimeout(statusFadeTimeoutId);
 
-      if (!displayedStatusText || !statusTextEl.textContent) {
+      if (isFirstStatus || !statusTextEl.textContent) {
         statusTextEl.classList.remove("is-fading");
         statusTextEl.textContent = nextText;
-        displayedStatusText = nextText;
-        statusLastCommitAtMs = performance.now();
         return;
       }
 
@@ -833,49 +894,8 @@
       statusFadeTimeoutId = window.setTimeout(() => {
         statusTextEl.textContent = nextText;
         statusTextEl.classList.remove("is-fading");
-        displayedStatusText = nextText;
-        statusLastCommitAtMs = performance.now();
         statusFadeTimeoutId = 0;
-
-        if (statusText !== displayedStatusText) {
-          schedulePendingStatusUpdate();
-        }
       }, STATUS_TEXT_FADE_MS);
-    }
-
-    function schedulePendingStatusUpdate() {
-      window.clearTimeout(statusPendingTimeoutId);
-
-      const remainingMs = Math.max(0, STATUS_TEXT_MIN_VISIBLE_MS - (performance.now() - statusLastCommitAtMs));
-      if (remainingMs === 0) {
-        commitStatusText(statusText);
-        return;
-      }
-
-      statusPendingTimeoutId = window.setTimeout(() => {
-        statusPendingTimeoutId = 0;
-        if (statusText !== displayedStatusText) {
-          commitStatusText(statusText);
-        }
-      }, remainingMs);
-    }
-
-    function setStatus(text) {
-      if (text === statusText) return;
-      statusText = text;
-
-      if (statusFadeTimeoutId) {
-        window.clearTimeout(statusFadeTimeoutId);
-        statusFadeTimeoutId = 0;
-        statusTextEl.classList.remove("is-fading");
-      }
-
-      if (!displayedStatusText || !statusTextEl.textContent) {
-        commitStatusText(statusText);
-        return;
-      }
-
-      schedulePendingStatusUpdate();
     }
 
     window.ofCurvesAndHandsNativeStatus = (text) => {
@@ -1790,7 +1810,6 @@
 
     function setLightboxAssignedPlotter(label = null) {
       const normalizedLabel = normalizePlotterLabel(label);
-      const mockupUrl = normalizedLabel ? PLOTTER_MOCKUP_URL_BY_LABEL[normalizedLabel] || null : null;
       lightboxAssignedPlotterLabel = normalizedLabel;
       if (plotterSideTitleEl) {
         plotterSideTitleEl.textContent = normalizedLabel ? `Plotter ${normalizedLabel}` : "Waiting for plotter";
@@ -1800,16 +1819,20 @@
           ? `Look to plotter ${normalizedLabel} for your kolam!`
           : lightboxPlotterFallbackCopy;
       }
-      if (plotterMockupImageEl) {
-        if (mockupUrl) {
-          plotterMockupImageEl.src = mockupUrl;
-          plotterMockupImageEl.alt = `Plotter ${normalizedLabel} mockup`;
-          plotterMockupImageEl.hidden = false;
-          plotterMockupImageEl.classList.add("visible");
-        } else {
-          plotterMockupImageEl.alt = "";
-          plotterMockupImageEl.hidden = true;
-          plotterMockupImageEl.classList.remove("visible");
+      for (const plotterLabel of availablePlotterLabels) {
+        const isActive = normalizedLabel === plotterLabel;
+        const cardEl = plotterCardEls.find((el) => el.dataset.plotterCard === plotterLabel);
+        const statusEl = plotterStatusEls.get(plotterLabel);
+        const imageEl = plotterImageEls.get(plotterLabel);
+        if (cardEl) {
+          cardEl.classList.toggle("active", isActive);
+        }
+        if (statusEl) {
+          statusEl.textContent = isActive ? "Drawing Your Kolam" : "Standing By";
+        }
+        if (imageEl) {
+          imageEl.src = isActive ? PLOTTER_ACTIVE_SVG_URL : PLOTTER_INACTIVE_SVG_URL;
+          imageEl.alt = `Plotter ${plotterLabel} ${isActive ? "active" : "inactive"}`;
         }
       }
     }
