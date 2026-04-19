@@ -570,16 +570,20 @@
       [1, "B"],
       [2, "X"],
       [3, "Y"],
+      [8, "Back"],
+      [9, "Start"],
       [6, "B6"],
       [12, "D-pad up"],
       [13, "D-pad down"],
     ]);
     const GAMEPAD_SERVO_TOGGLE_BUTTON_INDEX = 6;
+    const GAMEPAD_CLEAR_SELECTION_BUTTON_INDICES = [8, 9];
     const GAMEPAD_PEN_UP_BUTTON_INDEX = 12;
     const GAMEPAD_PEN_DOWN_BUTTON_INDEX = 13;
     const GAMEPAD_WATCHED_BUTTON_INDICES = [
       ...GAMEPAD_PLOTTER_BUTTON_PRIORITY,
       GAMEPAD_SERVO_TOGGLE_BUTTON_INDEX,
+      ...GAMEPAD_CLEAR_SELECTION_BUTTON_INDICES,
       GAMEPAD_PEN_UP_BUTTON_INDEX,
       GAMEPAD_PEN_DOWN_BUTTON_INDEX,
     ];
@@ -1067,10 +1071,25 @@
       );
     }
 
+    async function clearActiveGamepadPlotterSelection() {
+      if (!(await ensureActiveModeForManualAction("gamepad"))) {
+        return;
+      }
+
+      eraseTraceModeArmed = false;
+      activeGamepadPlotterIndex = null;
+      setStatus(`Controller selection cleared. ${READY_STATUS}`);
+    }
+
     function handleGamepadButtonPress(buttonIndex) {
       const selectedPlotterIndex = gamepadPlotterByButtonIndex.get(buttonIndex);
       if (selectedPlotterIndex !== undefined) {
         void setActiveGamepadPlotter(selectedPlotterIndex, buttonIndex);
+        return;
+      }
+
+      if (GAMEPAD_CLEAR_SELECTION_BUTTON_INDICES.includes(buttonIndex)) {
+        void clearActiveGamepadPlotterSelection();
         return;
       }
 
