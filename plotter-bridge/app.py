@@ -87,10 +87,15 @@ SERVO_CHANNEL_NAMES = "ABCD"
 SVG_NS = "http://www.w3.org/2000/svg"
 NEXT_PLOTTER_INDEX = 0
 PLOTTER_INDEX_BY_PORT: dict[str, int] = {}
+ACTIVE_GUIDED_PLOT_REQUESTS_BY_CLIENT_ID: dict[str, dict[str, Any]] = {}
 PASSIVE_WRAPPER = REPO_ROOT / "mediapipe-handpose" / "passive" / "run_passive_kolam.py"
 PASSIVE_SOURCE_SCRIPT = AXIDRAW_ROOT / "sketches-mdw" / "test-d-1-n-plotter-10min-dynamickolam.py"
 DASHBOARD_HTML = REPO_ROOT / "plotter-bridge" / "dashboard.html"
 PLOTTER_SPEED_SCALE = 3.0
+DEDICATED_PASSIVE_PLOTTER_SLOT = max(
+    1,
+    min(MAX_SUPPORTED_PLOTTERS, int(os.environ.get("DEDICATED_PASSIVE_PLOTTER_SLOT", "3"))),
+)
 
 
 def scaled_plotter_speed(env_name: str, default: int) -> int:
@@ -163,6 +168,71 @@ PLOTTER_INDEX_BY_ARDUINO_SERVO_CHANNEL = {
 
 def plotter_index_for_arduino_servo_channel(channel_value: int) -> int | None:
     return PLOTTER_INDEX_BY_ARDUINO_SERVO_CHANNEL.get(normalize_servo_channel(channel_value))
+
+
+def parse_comma_separated_ints(env_name: str) -> tuple[int, ...]:
+    raw_value = os.environ.get(env_name, "").strip()
+    if not raw_value:
+        return ()
+    values: list[int] = []
+    for chunk in raw_value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        values.append(int(chunk))
+    return tuple(values)
+
+
+def normalized_plotter_indices(values: tuple[int, ...]) -> tuple[int, ...]:
+    normalized: list[int] = []
+    for value in values:
+        clamped = max(1, min(MAX_SUPPORTED_PLOTTERS, int(value)))
+        if clamped not in normalized:
+            normalized.append(clamped)
+    return tuple(normalized)
+
+
+def plotter_indices_for_servo_channels(channel_values: tuple[int, ...]) -> tuple[int, ...]:
+    indices: list[int] = []
+    for channel_value in channel_values:
+        plotter_index = plotter_index_for_arduino_servo_channel(channel_value)
+        if plotter_index is None or plotter_index in indices:
+            continue
+        indices.append(plotter_index)
+    return tuple(indices)
+
+
+DEFAULT_DEDICATED_PASSIVE_SERVO_CHANNEL = normalize_servo_channel(
+    int(os.environ.get("DEDICATED_PASSIVE_SERVO_CHANNEL", "3"))
+)
+DEFAULT_ACTIVE_MODE_SERVO_CHANNELS = tuple(
+    normalize_servo_channel(channel_value)
+    for channel_value in parse_comma_separated_ints("ACTIVE_MODE_SERVO_CHANNELS") or (1, 2)
+)
+DEDICATED_PASSIVE_PLOTTER_INDEX = normalized_plotter_indices(
+    parse_comma_separated_ints("DEDICATED_PASSIVE_PLOTTER_INDEX")
+)[:1]
+DEDICATED_PASSIVE_PLOTTER_INDEX = (
+    DEDICATED_PASSIVE_PLOTTER_INDEX[0]
+    if DEDICATED_PASSIVE_PLOTTER_INDEX
+    else (
+        plotter_index_for_arduino_servo_channel(DEFAULT_DEDICATED_PASSIVE_SERVO_CHANNEL)
+        or 1
+    )
+)
+ACTIVE_MODE_PLOTTER_INDICES = normalized_plotter_indices(
+    parse_comma_separated_ints("ACTIVE_MODE_PLOTTER_INDICES")
+) or tuple(
+    plotter_index
+    for plotter_index in plotter_indices_for_servo_channels(DEFAULT_ACTIVE_MODE_SERVO_CHANNELS)
+    if plotter_index != DEDICATED_PASSIVE_PLOTTER_INDEX
+)
+if not ACTIVE_MODE_PLOTTER_INDICES:
+    ACTIVE_MODE_PLOTTER_INDICES = tuple(
+        plotter_index
+        for plotter_index in range(1, MAX_SUPPORTED_PLOTTERS + 1)
+        if plotter_index != DEDICATED_PASSIVE_PLOTTER_INDEX
+    )
 
 
 def default_arduino_toggle_command_for_plotter(plotter_index: int) -> str:
@@ -671,6 +741,7 @@ def snapshot_dashboard_state() -> dict[str, Any]:
     busy_ports = sorted(snapshot_busy_ports())
     idle_ports = [port for port in detected_ports if port not in busy_ports]
     connectable_ports = sorted(list_connectable_axidraw_ports(idle_ports))
+    reserved_passive_port = dedicated_passive_port(detected_ports)
     plotter_indices = plotter_indices_by_port(detected_ports)
     reverse_plotter_indices = {index: port for port, index in plotter_indices.items()}
     active_guided_area_mode = snapshot_active_guided_area_mode()
@@ -748,6 +819,8 @@ def snapshot_dashboard_state() -> dict[str, Any]:
             {
                 "plotter_index": plotter_index,
                 "plotter_label": plotter_label(plotter_index - 1),
+                "active_mode_enabled": not port_matches(display_port, reserved_passive_port),
+                "passive_mode_reserved": port_matches(display_port, reserved_passive_port),
                 "port": display_port,
                 "detected_port": detected_port,
                 "configured_port": configured_port,
@@ -786,12 +859,20 @@ def snapshot_dashboard_state() -> dict[str, Any]:
         "busy_ports": busy_ports,
         "plotters": plotters,
         "plotter_count": len(plotters),
+        "active_mode_plotter_indices": list(plotter_indices_by_port(active_mode_ports(detected_ports, detected_ports)).values()),
+        "dedicated_passive_plotter_index": (
+            plotter_indices_by_port([reserved_passive_port]).get(reserved_passive_port)
+            if reserved_passive_port
+            else None
+        ),
+        "dedicated_passive_port": reserved_passive_port,
         "active_guided_area_mode": active_guided_area_mode,
         "passive_mode": {
             **passive_mode,
             "session_seed": passive_seed,
             "pattern_counts_by_port": passive_pattern_counts,
         },
+        "active_guided_plot_requests": snapshot_active_guided_plot_requests(),
         "arduino": arduino_state,
         "controller": controller_state,
     }
@@ -883,7 +964,7 @@ def control_command_message(command_name: str, result_count: int) -> str:
     if command_name == "erase_area":
         return (
             f"Swept the packed area on {result_count} plotter(s) in parallel. "
-            "Servo positions were left unchanged."
+            "Each plotter flipped into erase mode for the sweep and then returned to marker mode."
         )
     return f"Ran {command_name} on {result_count} plotter(s)."
 
@@ -907,12 +988,99 @@ def set_arduino_servo_mode(
     return message
 
 
+def plotter_uses_toggle_servo_transitions(plotter_index: int) -> bool:
+    servo_channel = ARDUINO_SERVO_CHANNEL_BY_PLOTTER.get(plotter_index, plotter_index)
+    return normalize_servo_channel(servo_channel) == 4
+
+
 def ensure_plotter_servo_ready_for_drawing(context_label: str, plotter_index: int) -> str:
     result = ensure_arduino_servo_mode("marker", plotter_index=plotter_index, force=True)
     message = str(result.get("message", "Arduino servo prep failed."))
     if result.get("status") != "done":
         raise RuntimeError(f"Arduino servo prep failed: {message}")
     print(f"{context_label} Arduino servo ready for drawing: {message}")
+    return message
+
+
+def toggle_plotter_servo(context_label: str, plotter_index: int, action_label: str) -> str:
+    print(f"{context_label} {action_label}...")
+    result = toggle_arduino_servos(plotter_indices=[plotter_index])
+    message = str(result.get("message", "Arduino servo toggle failed."))
+    if result.get("status") != "done":
+        raise RuntimeError(f"Arduino servo toggle failed: {message}")
+    print(f"{context_label} Arduino servo response: {message}")
+    current_mode = ARDUINO_SERVO_MODE_BY_PLOTTER.get(plotter_index, ARDUINO_SERVO_UNKNOWN_MODE)
+    print(
+        f"{context_label} Plotter {plotter_label(plotter_index - 1)} servo toggled to {current_mode} mode."
+    )
+    return message
+
+
+def active_mode_servo_plotter_index(plotter_index: int) -> int:
+    normalized_plotter_index = max(1, min(MAX_SUPPORTED_PLOTTERS, int(plotter_index)))
+    return {1: 3, 3: 1}.get(normalized_plotter_index, normalized_plotter_index)
+
+
+def active_mode_plotter_uses_toggle_servo_transitions(plotter_index: int) -> bool:
+    return plotter_uses_toggle_servo_transitions(active_mode_servo_plotter_index(plotter_index))
+
+
+def ensure_active_mode_plotter_servo_ready_for_drawing(
+    context_label: str,
+    plotter_index: int,
+) -> str:
+    servo_plotter_index = active_mode_servo_plotter_index(plotter_index)
+    result = ensure_arduino_servo_mode("marker", plotter_index=servo_plotter_index, force=True)
+    message = str(result.get("message", "Arduino servo prep failed."))
+    if result.get("status") != "done":
+        raise RuntimeError(f"Arduino servo prep failed: {message}")
+    print(
+        f"{context_label} Active-mode servo ready for drawing: {message} "
+        f"(logical plotter {plotter_index} -> servo plotter {servo_plotter_index})."
+    )
+    return message
+
+
+def set_active_mode_arduino_servo_mode(
+    context_label: str,
+    plotter_index: int,
+    target_mode: str,
+    action_label: str,
+) -> str:
+    normalized_mode = target_mode.strip().lower()
+    servo_plotter_index = active_mode_servo_plotter_index(plotter_index)
+    print(
+        f"{context_label} {action_label} "
+        f"(logical plotter {plotter_index} -> servo plotter {servo_plotter_index})..."
+    )
+    result = ensure_arduino_servo_mode(normalized_mode, plotter_index=servo_plotter_index, force=True)
+    message = str(result.get("message", "Arduino servo toggle failed."))
+    if result.get("status") != "done":
+        raise RuntimeError(f"Arduino servo toggle failed: {message}")
+    print(f"{context_label} Arduino servo response: {message}")
+    print(
+        f"{context_label} Active-mode servo for logical plotter {plotter_index} "
+        f"rotated to {normalized_mode} mode via servo plotter {servo_plotter_index}."
+    )
+    return message
+
+
+def toggle_active_mode_plotter_servo(context_label: str, plotter_index: int, action_label: str) -> str:
+    servo_plotter_index = active_mode_servo_plotter_index(plotter_index)
+    print(
+        f"{context_label} {action_label} "
+        f"(logical plotter {plotter_index} -> servo plotter {servo_plotter_index})..."
+    )
+    result = toggle_arduino_servos(plotter_indices=[servo_plotter_index])
+    message = str(result.get("message", "Arduino servo toggle failed."))
+    if result.get("status") != "done":
+        raise RuntimeError(f"Arduino servo toggle failed: {message}")
+    print(f"{context_label} Arduino servo response: {message}")
+    current_mode = ARDUINO_SERVO_MODE_BY_PLOTTER.get(servo_plotter_index, ARDUINO_SERVO_UNKNOWN_MODE)
+    print(
+        f"{context_label} Active-mode servo for logical plotter {plotter_index} "
+        f"toggled to {current_mode} mode via servo plotter {servo_plotter_index}."
+    )
     return message
 
 
@@ -930,10 +1098,10 @@ def draw_svg_pass_on_plotter(svg_text: str, port: str) -> None:
 
 def draw_svg_on_plotter(svg_text: str, port: str, plotter_index: int) -> str:
     context_label = f"[plotter {port}]"
-    ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+    ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
     print(f"{context_label} Pass 1/2: drawing kolam.")
     draw_svg_pass_on_plotter(svg_text, port)
-    servo_message = set_arduino_servo_mode(
+    servo_message = set_active_mode_arduino_servo_mode(
         context_label,
         plotter_index,
         "erase",
@@ -945,7 +1113,7 @@ def draw_svg_on_plotter(svg_text: str, port: str, plotter_index: int) -> str:
     try:
         draw_svg_pass_on_plotter(svg_text, port)
     finally:
-        set_arduino_servo_mode(
+        set_active_mode_arduino_servo_mode(
             context_label,
             plotter_index,
             "marker",
@@ -1507,7 +1675,7 @@ def erase_active_guided_area(ad: axidraw.AxiDraw, context_label: str) -> None:
 
 
 def prepare_plotter_for_erase_trace(ad: axidraw.AxiDraw, context_label: str, plotter_index: int) -> None:
-    ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+    ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
     print(
         f"{context_label} Moving to erase prep point "
         f"({ACTIVE_GUIDED_ERASE_PREP_X_IN:.2f}, {ACTIVE_GUIDED_ERASE_PREP_Y_IN:.2f}) in pen mode."
@@ -1516,12 +1684,19 @@ def prepare_plotter_for_erase_trace(ad: axidraw.AxiDraw, context_label: str, plo
     ad.moveto(ACTIVE_GUIDED_ERASE_PREP_X_IN, ACTIVE_GUIDED_ERASE_PREP_Y_IN)
     ad.block()
 
-    set_arduino_servo_mode(
-        context_label,
-        plotter_index,
-        "erase",
-        "Rotating Arduino servo into erase mode",
-    )
+    if active_mode_plotter_uses_toggle_servo_transitions(plotter_index):
+        toggle_active_mode_plotter_servo(
+            context_label,
+            plotter_index,
+            "Toggling Arduino servo into erase mode after packed-area draw",
+        )
+    else:
+        set_active_mode_arduino_servo_mode(
+            context_label,
+            plotter_index,
+            "erase",
+            "Rotating Arduino servo into erase mode",
+        )
     print(f"{context_label} Waiting {ARDUINO_REDRAW_PAUSE_SECONDS:.1f}s for eraser to settle...")
     time.sleep(max(0.0, ARDUINO_REDRAW_PAUSE_SECONDS))
 
@@ -1674,7 +1849,7 @@ def erase_trace_active_guided_area(
             )
     finally:
         try:
-            set_arduino_servo_mode(
+            set_active_mode_arduino_servo_mode(
                 context_label,
                 plotter_index,
                 "marker",
@@ -1684,6 +1859,26 @@ def erase_trace_active_guided_area(
             return_interactive_plotter_to_origin(ad)
 
     return len(occupied_slots)
+
+
+def sweep_active_guided_area(
+    ad: axidraw.AxiDraw,
+    context_label: str,
+    plotter_index: int,
+) -> None:
+    prepare_plotter_for_erase_trace(ad, context_label, plotter_index)
+    try:
+        erase_active_guided_area(ad, context_label)
+    finally:
+        try:
+            set_active_mode_arduino_servo_mode(
+                context_label,
+                plotter_index,
+                "marker",
+                "Returning Arduino servo to marker mode after erase sweep",
+            )
+        finally:
+            return_interactive_plotter_to_origin(ad)
 
 
 def trace_active_guided_area_on_plotter(port: str, plotter_index: int) -> str:
@@ -1699,7 +1894,7 @@ def trace_active_guided_area_on_plotter(port: str, plotter_index: int) -> str:
 
     ad = build_interactive_plotter(port)
     try:
-        ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+        ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
         layout["module"].draw_pattern(
             ad,
             layout["normalized_pattern"],
@@ -1730,7 +1925,7 @@ def trace_active_guided_area_on_plotter(port: str, plotter_index: int) -> str:
             )
         finally:
             try:
-                set_arduino_servo_mode(
+                set_active_mode_arduino_servo_mode(
                     context_label,
                     plotter_index,
                     "marker",
@@ -1775,7 +1970,7 @@ def sweep_demo_on_plotter(port: str, plotter_index: int) -> str:
 
     ad = build_interactive_plotter(port)
     try:
-        ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+        ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
         layout["module"].draw_pattern(
             ad,
             layout["normalized_pattern"],
@@ -1802,7 +1997,7 @@ def sweep_demo_on_plotter(port: str, plotter_index: int) -> str:
             )
         finally:
             try:
-                set_arduino_servo_mode(
+                set_active_mode_arduino_servo_mode(
                     context_label,
                     plotter_index,
                     "marker",
@@ -1896,11 +2091,11 @@ def sweep_demo_on_plotters(plotter_indices_by_port: dict[str, int]) -> dict[str,
     return actions_by_port
 
 
-def sweep_active_guided_area_on_plotter(port: str) -> str:
+def sweep_active_guided_area_on_plotter(port: str, plotter_index: int) -> str:
     ad = build_interactive_plotter(port)
     context_label = f"[plotter {port}]"
     try:
-        erase_active_guided_area(ad, context_label)
+        sweep_active_guided_area(ad, context_label, plotter_index)
         port_state = get_active_guided_area_port_state(port)
         set_active_guided_area_port_state(port, 0, port_state["cycles_completed"])
         clear_active_guided_area_slot_previews(port)
@@ -1917,7 +2112,7 @@ def horizontal_sweep_active_guided_area_on_plotter(port: str, plotter_index: int
     ad = build_interactive_plotter(port)
     context_label = f"[plotter {port}]"
     try:
-        ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+        ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
         left, right, bottom, top = active_guided_area_configured_bounds()
         draw_rectangle_bounds(
             ad,
@@ -1928,7 +2123,7 @@ def horizontal_sweep_active_guided_area_on_plotter(port: str, plotter_index: int
             top,
         )
         try:
-            set_arduino_servo_mode(
+            set_active_mode_arduino_servo_mode(
                 context_label,
                 plotter_index,
                 "erase",
@@ -1945,7 +2140,7 @@ def horizontal_sweep_active_guided_area_on_plotter(port: str, plotter_index: int
                 top,
             )
         finally:
-            set_arduino_servo_mode(
+            set_active_mode_arduino_servo_mode(
                 context_label,
                 plotter_index,
                 "marker",
@@ -2008,8 +2203,13 @@ def horizontal_sweep_active_guided_area_on_plotters(
     return actions_by_port
 
 
-def sweep_active_guided_area_on_plotters(ports: list[str]) -> dict[str, str]:
+def sweep_active_guided_area_on_plotters(
+    ports: list[str],
+    *,
+    mapping_ports: list[str] | None = None,
+) -> dict[str, str]:
     ordered_ports = sorted(ports)
+    plotter_indices = plotter_indices_by_port(mapping_ports if mapping_ports is not None else ordered_ports)
     start_event = threading.Event()
     errors: list[str] = []
     actions_by_port: dict[str, str] = {}
@@ -2018,7 +2218,10 @@ def sweep_active_guided_area_on_plotters(ports: list[str]) -> dict[str, str]:
     def worker(port: str) -> None:
         try:
             start_event.wait()
-            action = sweep_active_guided_area_on_plotter(port)
+            plotter_index = plotter_indices.get(port)
+            if plotter_index is None:
+                raise RuntimeError(f"Could not determine plotter index for {port}.")
+            action = sweep_active_guided_area_on_plotter(port, plotter_index)
             with results_lock:
                 actions_by_port[port] = action
         except Exception as exc:  # pylint: disable=broad-except
@@ -2060,7 +2263,7 @@ def draw_guided_kolam_in_active_area(
     message = ""
 
     try:
-        ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+        ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
         draw_guided_kolam_pass_on_plotter(
             ad,
             guided_kolam,
@@ -2087,15 +2290,15 @@ def draw_guided_kolam_in_active_area(
 
         if slot_index + 1 >= slot_count:
             print(f"{context_label} Active area is full after {slot_label.lower()}.")
-            traced_slot_count = erase_trace_active_guided_area(ad, port, context_label, plotter_index)
+            sweep_active_guided_area(ad, context_label, plotter_index)
             cycles_completed += 1
             set_active_guided_area_port_state(port, 0, cycles_completed)
             clear_active_guided_area_slot_previews(port)
             message = (
                 f"Placed kolam in area slot {slot_index + 1}/{slot_count} on this "
                 f"{ACTIVE_GUIDED_AREA_WIDTH_IN:.1f}x{ACTIVE_GUIDED_AREA_HEIGHT_IN:.1f} in prototype area. "
-                f"The area filled up, then the bridge retraced {traced_slot_count} stored kolam(s) "
-                "in erase mode and reset the layout."
+                "The area filled up, then the bridge swept the packed area in erase mode "
+                "and reset the layout."
             )
             next_slot_index = 0
         else:
@@ -2128,9 +2331,9 @@ def draw_guided_kolam_on_plotter(guided_kolam: dict[str, Any], port: str, plotte
     context_label = f"[plotter {port}]"
 
     try:
-        ensure_plotter_servo_ready_for_drawing(context_label, plotter_index)
+        ensure_active_mode_plotter_servo_ready_for_drawing(context_label, plotter_index)
         draw_guided_kolam_pass_on_plotter(ad, guided_kolam, context_label, "Pass 1/2")
-        servo_message = set_arduino_servo_mode(
+        servo_message = set_active_mode_arduino_servo_mode(
             context_label,
             plotter_index,
             "erase",
@@ -2141,7 +2344,7 @@ def draw_guided_kolam_on_plotter(guided_kolam: dict[str, Any], port: str, plotte
         try:
             draw_guided_kolam_pass_on_plotter(ad, guided_kolam, context_label, "Pass 2/2")
         finally:
-            set_arduino_servo_mode(
+            set_active_mode_arduino_servo_mode(
                 context_label,
                 plotter_index,
                 "marker",
@@ -2158,6 +2361,36 @@ def draw_guided_kolam_on_plotter(guided_kolam: dict[str, Any], port: str, plotte
 
 def plotter_label(index: int) -> str:
     return chr(ord("A") + index)
+
+
+def ordered_unique_ports(ports: list[str]) -> list[str]:
+    return list(dict.fromkeys(sorted(ports)))
+
+
+def dedicated_passive_port(ports: list[str]) -> str | None:
+    ordered_ports = ordered_unique_ports(ports)
+    if len(ordered_ports) < DEDICATED_PASSIVE_PLOTTER_SLOT:
+        return None
+    return ordered_ports[DEDICATED_PASSIVE_PLOTTER_SLOT - 1]
+
+
+def port_matches(candidate_port: str | None, expected_port: str | None) -> bool:
+    if not candidate_port or not expected_port:
+        return False
+    return bool(serial_port_aliases(candidate_port).intersection(serial_port_aliases(expected_port)))
+
+
+def active_mode_plotter_labels(detected_ports: list[str]) -> str:
+    active_ports = active_mode_ports(detected_ports, detected_ports)
+    labels_by_port = {
+        port: plotter_label(plotter_index - 1)
+        for port, plotter_index in plotter_indices_by_port(detected_ports).items()
+        if port in active_ports
+    }
+    labels = [labels_by_port[port] for port in active_ports if port in labels_by_port]
+    if not labels:
+        return "the active plotters"
+    return ", ".join(f"Plotter {label}" for label in labels)
 
 
 def sync_plotter_indices_locked(ports: list[str]) -> None:
@@ -2224,6 +2457,89 @@ def plotter_labels_by_port(ports: list[str]) -> dict[str, str]:
     return {
         port: plotter_label(plotter_index - 1)
         for port, plotter_index in plotter_indices_by_port(ports).items()
+    }
+
+
+def active_mode_ports(ports: list[str], all_ports: list[str] | None = None) -> list[str]:
+    ordered_ports = ordered_unique_ports(ports)
+    reserved_port = dedicated_passive_port(all_ports if all_ports is not None else ordered_ports)
+    return [port for port in ordered_ports if not port_matches(port, reserved_port)]
+
+
+def active_mode_availability_payload(
+    detected_ports: list[str],
+    connectable_ports: list[str],
+    busy_ports: list[str],
+) -> dict[str, Any]:
+    reserved_port = dedicated_passive_port(detected_ports)
+    active_detected_ports = active_mode_ports(detected_ports, detected_ports)
+    active_connectable_ports = active_mode_ports(connectable_ports, detected_ports)
+    active_busy_ports = active_mode_ports(busy_ports, detected_ports)
+    active_plotter_text = active_mode_plotter_labels(detected_ports)
+    reserved_plotter_index = (
+        plotter_indices_by_port([reserved_port]).get(reserved_port)
+        if reserved_port
+        else None
+    )
+    reserved_plotter_label = (
+        plotter_label(reserved_plotter_index - 1)
+        if isinstance(reserved_plotter_index, int)
+        else f"#{DEDICATED_PASSIVE_PLOTTER_SLOT}"
+    )
+
+    if active_connectable_ports:
+        return {
+            "status": "done",
+            "active_detected_ports": active_detected_ports,
+            "active_connectable_ports": active_connectable_ports,
+            "active_busy_ports": active_busy_ports,
+            "dedicated_passive_port": reserved_port,
+        }
+
+    if active_busy_ports:
+        return {
+            "status": "busy",
+            "message": f"{active_plotter_text} are currently busy.",
+            "busy_ports": active_busy_ports,
+            "detected_ports": detected_ports,
+            "active_detected_ports": active_detected_ports,
+            "active_connectable_ports": active_connectable_ports,
+            "dedicated_passive_port": reserved_port,
+        }
+
+    if active_detected_ports:
+        return {
+            "status": "plotter_unavailable",
+            "message": (
+                f"{active_plotter_text} were detected, but their connections could not be opened."
+            ),
+            "ports": active_detected_ports,
+            "detected_ports": detected_ports,
+            "active_detected_ports": active_detected_ports,
+            "active_connectable_ports": active_connectable_ports,
+            "dedicated_passive_port": reserved_port,
+        }
+
+    if detected_ports:
+        return {
+            "status": "no_active_plotter",
+            "message": (
+                f"Active mode is limited to {active_plotter_text}. "
+                f"Plotter {reserved_plotter_label} stays reserved for passive mode."
+            ),
+            "detected_ports": detected_ports,
+            "active_detected_ports": active_detected_ports,
+            "active_connectable_ports": active_connectable_ports,
+            "dedicated_passive_port": reserved_port,
+        }
+
+    return {
+        "status": "no_plotter",
+        "message": "No plotter connected.",
+        "detected_ports": detected_ports,
+        "active_detected_ports": active_detected_ports,
+        "active_connectable_ports": active_connectable_ports,
+        "dedicated_passive_port": reserved_port,
     }
 
 
@@ -2865,6 +3181,51 @@ def snapshot_busy_ports() -> set[str]:
         return set(BUSY_PORTS)
 
 
+def set_active_guided_plot_request(
+    client_request_id: str | None,
+    *,
+    selected_port: str,
+    assigned_label: str,
+    next_label: str,
+    selected_plotter_index: int,
+    mode: str,
+    plot_mode: str,
+) -> None:
+    if not client_request_id:
+        return
+
+    with STATE_LOCK:
+        ACTIVE_GUIDED_PLOT_REQUESTS_BY_CLIENT_ID[client_request_id] = {
+            "client_request_id": client_request_id,
+            "port": selected_port,
+            "assigned_plotter_label": assigned_label,
+            "next_plotter_label": next_label,
+            "plotter_index": int(selected_plotter_index),
+            "mode": mode,
+            "plot_mode": plot_mode,
+            "assigned_at_ms": int(time.time() * 1000),
+        }
+
+
+def clear_active_guided_plot_request(client_request_id: str | None) -> None:
+    if not client_request_id:
+        return
+
+    with STATE_LOCK:
+        ACTIVE_GUIDED_PLOT_REQUESTS_BY_CLIENT_ID.pop(client_request_id, None)
+
+
+def snapshot_active_guided_plot_requests() -> list[dict[str, Any]]:
+    with STATE_LOCK:
+        requests = [
+            dict(request_payload)
+            for request_payload in ACTIVE_GUIDED_PLOT_REQUESTS_BY_CLIENT_ID.values()
+        ]
+
+    requests.sort(key=lambda request_payload: int(request_payload.get("assigned_at_ms", 0)))
+    return requests
+
+
 def list_serial_port_details() -> list[dict[str, Any]]:
     if SERIAL_IMPORT_ERROR is not None:
         return []
@@ -3220,9 +3581,15 @@ def ensure_arduino_servo_mode(
         current_mode = ARDUINO_SERVO_MODE_BY_PLOTTER.get(selected_plotter_index, ARDUINO_SERVO_UNKNOWN_MODE)
 
     command_text = ARDUINO_PLOTTER_SERVO_COMMANDS[selected_plotter_index][normalized_mode]
-    toggle_only_command = normalized_arduino_command(command_text) == normalized_arduino_command(
-        arduino_plotter_toggle_command(selected_plotter_index)
-    )
+    toggle_command_text = arduino_plotter_toggle_command(selected_plotter_index)
+    toggle_only_command = normalized_arduino_command(command_text) == normalized_arduino_command(toggle_command_text)
+    if (
+        plotter_uses_toggle_servo_transitions(selected_plotter_index)
+        and current_mode in {"marker", "erase"}
+        and current_mode != normalized_mode
+    ):
+        command_text = toggle_command_text
+        toggle_only_command = True
 
     if current_mode == normalized_mode and (not force or toggle_only_command):
         return arduino_result(
@@ -3360,12 +3727,17 @@ def reserve_specific_ports(ports: list[str]) -> bool:
         return True
 
 
-def choose_plotter_for_job(ports: list[str]) -> tuple[str, str, str, int] | None:
+def choose_plotter_for_job(
+    ports: list[str],
+    *,
+    mapping_ports: list[str] | None = None,
+) -> tuple[str, str, str, int] | None:
     global NEXT_PLOTTER_INDEX  # pylint: disable=global-statement
 
     ordered_ports = sorted(ports)
+    ordered_mapping_ports = sorted(mapping_ports) if mapping_ports else ordered_ports
     with STATE_LOCK:
-        sync_plotter_indices_locked(ordered_ports)
+        sync_plotter_indices_locked(ordered_mapping_ports)
         use_round_robin = should_round_robin_plotters(len(ordered_ports))
         start_index = NEXT_PLOTTER_INDEX % len(ordered_ports) if use_round_robin else 0
         for offset in range(len(ordered_ports)):
@@ -3756,7 +4128,10 @@ def run_control_command(command_name: str, ports: list[str]) -> list[dict[str, s
         return results
 
     if command_name == "erase_area":
-        actions_by_port = sweep_active_guided_area_on_plotters(ordered_ports)
+        actions_by_port = sweep_active_guided_area_on_plotters(
+            ordered_ports,
+            mapping_ports=list(detected_plotter_indices),
+        )
         for port in ordered_ports:
             action = actions_by_port.get(port)
             if action is None:
@@ -3920,34 +4295,27 @@ def run_bridge_control_command(
     busy_ports = sorted(snapshot_busy_ports())
     idle_ports = [port for port in detected_ports if port not in busy_ports]
     connectable_ports = sorted(list_connectable_axidraw_ports(idle_ports))
+    active_mode_availability = active_mode_availability_payload(
+        detected_ports,
+        connectable_ports,
+        busy_ports,
+    )
+    active_connectable_ports = list(active_mode_availability.get("active_connectable_ports", []))
 
-    if not connectable_ports:
-        if busy_ports:
-            return {
-                "status": "busy",
-                "message": "All available plotters are currently busy.",
-                "busy_ports": busy_ports,
-                "detected_ports": detected_ports,
-            }
-        if detected_ports:
-            return {
-                "status": "plotter_unavailable",
-                "message": "AxiDraw USB device detected, but connection could not be opened.",
-                "ports": detected_ports,
-            }
-        return {"status": "no_plotter", "message": "No plotter connected."}
+    if not active_connectable_ports:
+        return active_mode_availability
 
     requested_plotter_indices = plotter_indices or []
     try:
         if requested_plotter_indices:
             selected_ports = select_plotter_ports_by_index(
                 detected_ports,
-                connectable_ports,
+                active_connectable_ports,
                 requested_plotter_indices,
             )
         else:
-            target_count = len(connectable_ports) if count is None else count
-            selected_ports = choose_target_ports(target_count, [], connectable_ports)
+            target_count = len(active_connectable_ports) if count is None else count
+            selected_ports = choose_target_ports(target_count, [], active_connectable_ports)
     except RuntimeError as exc:
         return {"status": "error", "message": str(exc)}
 
@@ -4616,6 +4984,11 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"status": "error", "message": "Field 'count' must be an integer."})
                 return
 
+            plotter_index_value = body.get("plotter_index")
+            if plotter_index_value is not None and not isinstance(plotter_index_value, int):
+                self._send_json(400, {"status": "error", "message": "Field 'plotter_index' must be an integer."})
+                return
+
             requested_ports = body.get("ports", [])
             if requested_ports is None:
                 requested_ports = []
@@ -4624,7 +4997,11 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/passive-mode/start":
-                result = start_passive_mode(count=count_value, requested_ports=requested_ports)
+                result = start_passive_mode(
+                    count=count_value,
+                    requested_ports=requested_ports,
+                    plotter_indices=[plotter_index_value] if plotter_index_value is not None else None,
+                )
                 status_code = 200
                 if result["status"] == "busy":
                     status_code = 409
@@ -4661,42 +5038,28 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
             busy_ports = sorted(snapshot_busy_ports())
             idle_ports = [port for port in detected_ports if port not in busy_ports]
             connectable_ports = sorted(list_connectable_axidraw_ports(idle_ports))
+            active_mode_availability = active_mode_availability_payload(
+                detected_ports,
+                connectable_ports,
+                busy_ports,
+            )
+            active_connectable_ports = list(active_mode_availability.get("active_connectable_ports", []))
 
-            if not connectable_ports:
-                if busy_ports:
-                    self._send_json(
-                        409,
-                        {
-                            "status": "busy",
-                            "message": "All available plotters are currently busy.",
-                            "busy_ports": busy_ports,
-                            "detected_ports": detected_ports,
-                        },
-                    )
-                    return
-                if detected_ports:
-                    self._send_json(
-                        200,
-                        {
-                            "status": "plotter_unavailable",
-                            "message": "AxiDraw USB device detected, but connection could not be opened.",
-                            "ports": detected_ports,
-                        },
-                    )
-                    return
-                self._send_json(200, {"status": "no_plotter", "message": "No plotter connected."})
+            if not active_connectable_ports:
+                status_code = 409 if active_mode_availability["status"] == "busy" else 200
+                self._send_json(status_code, active_mode_availability)
                 return
 
             try:
                 if plotter_index_value is not None:
                     selected_ports = select_plotter_ports_by_index(
                         detected_ports,
-                        connectable_ports,
+                        active_connectable_ports,
                         [plotter_index_value],
                     )
                 else:
-                    target_count = count_value if count_value is not None else (len(requested_ports) or len(connectable_ports))
-                    selected_ports = choose_target_ports(target_count, requested_ports, connectable_ports)
+                    target_count = count_value if count_value is not None else (len(requested_ports) or len(active_connectable_ports))
+                    selected_ports = choose_target_ports(target_count, requested_ports, active_connectable_ports)
             except RuntimeError as exc:
                 self._send_json(400, {"status": "error", "message": str(exc)})
                 return
@@ -4737,6 +5100,17 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
         guided_kolam_payload = body.get("guidedKolam")
         if guided_kolam_payload is None:
             guided_kolam_payload = body.get("guided_kolam")
+        client_request_id_value = body.get("clientRequestId")
+        if client_request_id_value is None:
+            client_request_id_value = body.get("client_request_id")
+        if client_request_id_value is not None and not isinstance(client_request_id_value, str):
+            self._send_json(400, {"status": "error", "message": "Field 'clientRequestId' must be a string."})
+            return
+        client_request_id = (
+            client_request_id_value.strip()
+            if isinstance(client_request_id_value, str) and client_request_id_value.strip()
+            else None
+        )
         guided_kolam: dict[str, Any] | None = None
 
         if guided_kolam_payload is not None:
@@ -4760,31 +5134,17 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
             detected_ports = list_axidraw_ports()
             busy_ports = sorted(snapshot_busy_ports())
             idle_ports = [port for port in detected_ports if port not in busy_ports]
-            ports = sorted(list_connectable_axidraw_ports(idle_ports))
-            scheduler_ports = sorted(set(ports) | set(busy_ports))
+            connectable_ports = sorted(list_connectable_axidraw_ports(idle_ports))
+            ports = active_mode_ports(connectable_ports, detected_ports)
+            scheduler_ports = active_mode_ports(sorted(set(connectable_ports) | set(busy_ports)), detected_ports)
+            active_mode_availability = active_mode_availability_payload(
+                detected_ports,
+                connectable_ports,
+                busy_ports,
+            )
             if not ports:
-                if busy_ports:
-                    self._send_json(
-                        409,
-                        {
-                            "status": "busy",
-                            "message": "All available plotters are currently busy.",
-                            "busy_ports": busy_ports,
-                            "detected_ports": detected_ports,
-                        },
-                    )
-                    return
-                if detected_ports:
-                    self._send_json(
-                        200,
-                        {
-                            "status": "plotter_unavailable",
-                            "message": "AxiDraw USB device detected, but connection could not be opened.",
-                            "ports": detected_ports,
-                        },
-                    )
-                    return
-                self._send_json(200, {"status": "no_plotter", "message": "No plotter connected."})
+                status_code = 409 if active_mode_availability["status"] == "busy" else 200
+                self._send_json(status_code, active_mode_availability)
                 return
             if len(ports) > MAX_SUPPORTED_PLOTTERS:
                 self._send_json(
@@ -4798,7 +5158,10 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                selection = choose_plotter_for_job(scheduler_ports)
+                selection = choose_plotter_for_job(
+                    scheduler_ports,
+                    mapping_ports=detected_ports,
+                )
                 if selection is None:
                     self._send_json(
                         409,
@@ -4816,6 +5179,15 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                     "round_robin"
                     if should_round_robin_plotters(len(scheduler_ports))
                     else ("fixed" if len(scheduler_ports) > 1 else "single")
+                )
+                set_active_guided_plot_request(
+                    client_request_id,
+                    selected_port=selected_port,
+                    assigned_label=assigned_label,
+                    next_label=next_label,
+                    selected_plotter_index=selected_plotter_index,
+                    mode=mode,
+                    plot_mode="guided_kolam" if guided_kolam is not None else "svg",
                 )
                 active_guided_area_mode = snapshot_active_guided_area_mode()
                 plot_message: str | None = None
@@ -4877,6 +5249,7 @@ class PlotterBridgeHandler(BaseHTTPRequestHandler):
                 },
             )
         finally:
+            clear_active_guided_plot_request(client_request_id)
             release_busy_port(selected_port)
 
     def log_message(self, format_str: str, *args: Any) -> None:
